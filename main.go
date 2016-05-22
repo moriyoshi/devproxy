@@ -75,6 +75,8 @@ type HostPortPair struct {
 
 var contentTypeKey = http.CanonicalHeaderKey("Content-Type")
 
+var unixTimeEpoch = time.Unix(0, 0)
+
 func defaultPortForScheme(scheme string) string {
 	if scheme == "https" {
 		return "443"
@@ -1002,7 +1004,7 @@ func (ctx *OurContext) generateCertificate(hosts []string) (*tls.Certificate, er
 	}
 	ca := ctx.Config.MITM.SigningCertificateKeyPair
 	ctx.Logger.Debugf("CA: CN=%s", ca.Certificate.Subject.CommonName)
-	start := ctx.Now().Add(-time.Duration(time.Second * 60))
+	start := unixTimeEpoch
 	end := start.Add(time.Duration(time.Hour * 24 * 90))
 
 	h := sha1.New()

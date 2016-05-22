@@ -1,0 +1,20 @@
+# proxy settings are optional
+proxy:
+  http: http://127.0.0.1:9080/
+  https: http://127.0.0.1:9080/
+  excluded:
+    - www.google.com
+    - www.google.co.jp
+
+# tls settings are optional if you don't want to use MITM
+tls:
+  client:
+    verify: true
+  ca:
+    cert: testca.rsa.crt.pem
+    key: testca.rsa.key.pem
+
+hosts:
+  example.com:
+    ^(/static/.*)$: http://localhost:8081$1
+    ^(/.*)$: http://localhost:8080$1

@@ -1046,6 +1046,30 @@ func (ctx *OurContext) generateCertificate(hosts []string) (*tls.Certificate, er
 	return cert, nil
 }
 
+func (ctx *OurContext) reqHostIs(host HostPortPair) goproxy.ReqConditionFunc {
+	return func(req *http.Request, _ *goproxy.ProxyCtx) bool {
+		pairs := toHostPortPairs(req)
+		for _, a := range pairs {
+			if a == host {
+				return true
+			}
+			if host.Port == "" && a.Host == host.Host {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func buildHostPortPairFromHostName(name string) HostPortPair {
+	host, port, err := net.SplitHostPort(name)
+	if err == nil {
+		return HostPortPair{host, port}
+	} else {
+		return HostPortPair{name, ""}
+	}
+}
+
 func (ctx *OurContext) newProxyHttpServer() *goproxy.ProxyHttpServer {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Tr = ctx.newHttpTransport()
@@ -1055,7 +1079,8 @@ func (ctx *OurContext) newProxyHttpServer() *goproxy.ProxyHttpServer {
 	})
 	for _, perHostConfig := range ctx.Config.Hosts {
 		func(perHostConfig *PerHostConfig) {
-			proxy.OnRequest(goproxy.ReqHostIs(perHostConfig.Name)).DoFunc(
+			predicate := ctx.reqHostIs(buildHostPortPairFromHostName(perHostConfig.Name))
+			proxy.OnRequest(predicate).DoFunc(
 				func(r *http.Request, proxyCtx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 					newUrlString := ""
 					for _, pattern := range perHostConfig.Patterns {
@@ -1089,7 +1114,7 @@ func (ctx *OurContext) newProxyHttpServer() *goproxy.ProxyHttpServer {
 					return r, nil
 				})
 			if ctx.Config.MITM.SigningCertificateKeyPair.Certificate != nil {
-				proxy.OnRequest( /* goproxy.ReqHostIs(perHostConfig.Name + ":443") */ ).HandleConnectFunc(
+				proxy.OnRequest(predicate).HandleConnectFunc(
 					func(host string, proxyCtx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 						return &goproxy.ConnectAction{
 							Action:    goproxy.ConnectMitm,
@@ -1101,6 +1126,9 @@ func (ctx *OurContext) newProxyHttpServer() *goproxy.ProxyHttpServer {
 	}
 	proxy.OnResponse().DoFunc(func(resp *http.Response, proxyCtx *goproxy.ProxyCtx) *http.Response {
 		if proxyCtx.Req.Method == "GET" || proxyCtx.Req.Method == "POST" {
+			if resp == nil {
+				return resp
+			}
 			contentType, ok := resp.Header[contentTypeKey]
 			if !ok || len(contentType) == 0 {
 				return resp

@@ -52,6 +52,8 @@ import (
 	"strings"
 )
 
+type ResponseFilterFactory func(*ConfigReaderContext, map[interface{}]interface{}) (ResponseFilter, error)
+
 type Pattern struct {
 	Pattern      *regexp.Regexp
 	Substitution string
@@ -79,9 +81,10 @@ type ProxyConfig struct {
 }
 
 type Config struct {
-	Hosts map[string]*PerHostConfig
-	Proxy ProxyConfig
-	MITM  MITMConfig
+	Hosts           map[string]*PerHostConfig
+	Proxy           ProxyConfig
+	MITM            MITMConfig
+	ResponseFilters []ResponseFilter
 }
 
 var clientAuthTypeValues = map[string]tls.ClientAuthType{
@@ -857,6 +860,55 @@ func (ctx *ConfigReaderContext) extractMITMConfig(configMap map[string]interface
 	return
 }
 
+func (ctx *ConfigReaderContext) extractResponseFilters(configMap map[string]interface{}) (retval []ResponseFilter, err error) {
+	retval = make([]ResponseFilter, 0, 16)
+
+	__responseFilterConfigs, ok := configMap["response_filters"]
+	if !ok {
+		return
+	}
+	_responseFilterConfigs, ok := __responseFilterConfigs.([]interface{})
+	if !ok {
+		err = fmt.Errorf("%s: invalid structure under response_filters", ctx.Filename)
+		return
+	}
+
+	for i, _responseFilterConfig := range _responseFilterConfigs {
+		responseFilterConfig, ok := _responseFilterConfig.(map[interface{}]interface{})
+		if !ok {
+			err = fmt.Errorf("%s: invalid structure under response_filters/@%d", ctx.Filename, i)
+			return
+		}
+		_type, ok := responseFilterConfig["type"]
+		if !ok {
+			err = fmt.Errorf("%s: missing response_filters/@%d/type", ctx.Filename, i)
+			return
+		}
+
+		type_, ok := _type.(string)
+		if !ok {
+			err = fmt.Errorf("%s: invalid value for response_filters/@%d/type", ctx.Filename, i)
+			return
+		}
+
+		f, ok := FilterRepository.ResponseFilters[type_]
+		if !ok {
+			err = fmt.Errorf("%s: unknown filter \"%s\"", ctx.Filename, type_)
+			return
+		}
+
+		var responseFilter ResponseFilter
+		responseFilter, err = f(ctx, responseFilterConfig)
+		if err != nil {
+			err = fmt.Errorf("%s: failed to instantiate response filter \"%s\": %s", ctx.Filename, type_, err.Error())
+			return
+		}
+
+		retval = append(retval, responseFilter)
+	}
+	return
+}
+
 func loadConfig(yamlFile string, progname string) (*Config, error) {
 	f, err := os.Open(yamlFile)
 	if err != nil {
@@ -885,9 +937,14 @@ func loadConfig(yamlFile string, progname string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	responseFilters, err := ctx.extractResponseFilters(configMap)
+	if err != nil {
+		return nil, err
+	}
 	return &Config{
-		Hosts: perHostConfigs,
-		Proxy: proxy,
-		MITM:  mitm,
+		Hosts:           perHostConfigs,
+		Proxy:           proxy,
+		MITM:            mitm,
+		ResponseFilters: responseFilters,
 	}, nil
 }

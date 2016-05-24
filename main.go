@@ -63,10 +63,7 @@ type DevProxy struct {
 	LogWriter        io.WriteCloser
 	StdLogger        *log.Logger
 	Config           *Config
-	HTMLMediaTypes   []string
 	DefaultCharset   string
-	LabelHTML        []byte
-	InsertBefore     []byte
 	CryptoRandReader io.Reader
 	Now              func() time.Time
 	certCache        map[string]*tls.Certificate
@@ -269,6 +266,7 @@ func (ctx *DevProxy) newProxyHttpServer() *OurProxyHttpServer {
 		Logger:           ctx.Logger,
 		Tr:               ctx.newHttpTransport(),
 		TLSConfigFactory: ctx.newTLSConfigFactory(),
+		ResponseFilters:  ctx.Config.ResponseFilters,
 		SessionSerial:    0,
 	}
 }
@@ -315,17 +313,11 @@ func main() {
 	}
 	logWriter := logger.Writer()
 	ctx := DevProxy{
-		Logger:         logger,
-		LogWriter:      logWriter,
-		StdLogger:      log.New(logWriter, "", 0),
-		Config:         config,
-		DefaultCharset: "UTF-8",
-		HTMLMediaTypes: []string{
-			"text/html",
-			"application/xhtml+xml",
-		},
-		InsertBefore:     []byte(`</body>`),
-		LabelHTML:        []byte(`<div style="position:fixed;left:0;top:0;width:100%;background-color:#ff0">DEVELOPMENT</div>`),
+		Logger:           logger,
+		LogWriter:        logWriter,
+		StdLogger:        log.New(logWriter, "", 0),
+		Config:           config,
+		DefaultCharset:   "UTF-8",
 		CryptoRandReader: crand.Reader,
 		Now:              time.Now,
 		certCache:        make(map[string]*tls.Certificate, 0),

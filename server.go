@@ -35,40 +35,41 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/tls"
 	"fmt"
 	"github.com/Sirupsen/logrus"
 	"io"
-	"io/ioutil"
-	"math"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
+
+type ResponseFilter interface {
+	Filter(*http.Response, *OurProxyCtx) (*http.Response, error)
+}
 
 type OurProxyHttpServer struct {
 	Ctx              *DevProxy
 	Logger           *logrus.Logger
 	Tr               *http.Transport
 	TLSConfigFactory TLSConfigFactory
+	ResponseFilters  []ResponseFilter
 	SessionSerial    int64
 }
 
 type OurProxyCtx struct {
-	Proxy    *OurProxyHttpServer
-	Logger   *logrus.Logger
-	OrigReq  *http.Request
-	Req      *http.Request
-	OrigResp *http.Response
-	Resp     *http.Response
-	Tr       *http.Transport
-	Error    error
-	Session  int64
+	Proxy           *OurProxyHttpServer
+	Logger          *logrus.Logger
+	OrigReq         *http.Request
+	Req             *http.Request
+	OrigResp        *http.Response
+	Resp            *http.Response
+	Tr              *http.Transport
+	ResponseFilters []ResponseFilter
+	Error           error
+	Session         int64
 }
 
 func makeHttp10Response(header string, body string) string {
@@ -94,72 +95,17 @@ func (proxyCtx *OurProxyCtx) FilterRequest(r *http.Request) (req *http.Request, 
 }
 
 func (proxyCtx *OurProxyCtx) FilterResponse(resp *http.Response) *http.Response {
-	if proxyCtx.OrigReq != proxyCtx.Req {
-		if resp == nil {
-			return resp
-		}
-		contentType, ok := resp.Header[contentTypeKey]
-		if !ok || len(contentType) == 0 {
-			return resp
-		}
-		mimeType, params, err := mime.ParseMediaType(contentType[0])
+	proxyCtx.Logger.Debugf("applying %d response filters", len(proxyCtx.ResponseFilters))
+	for _, f := range proxyCtx.ResponseFilters {
+		newResp, err := f.Filter(resp, proxyCtx)
 		if err != nil {
-			proxyCtx.Logger.Warnf("invalid Content-Type header: %s", contentType[0])
-			return resp
+			proxyCtx.Logger.Errorf("failed to run the response filter: %s", err.Error())
+			return proxyCtx.OrigResp
 		}
-		applicable := false
-		for _, v := range proxyCtx.Proxy.Ctx.HTMLMediaTypes {
-			if v == mimeType {
-				applicable = true
-				break
-			}
-		}
-		if !applicable {
-			return resp
-		}
-		charset, ok := params["charset"]
-		if !ok {
-			charset = "UTF-8"
-		}
-		if charset == "UTF-16" {
-			return resp
-		}
-		if unsafe.Sizeof(resp.ContentLength) != unsafe.Sizeof(int(0)) {
-			if resp.ContentLength > math.MaxInt32 {
-				proxyCtx.Logger.Errorf("failed to read response body (%d expected)", resp.ContentLength)
-			}
-		}
-		contentLength := int(resp.ContentLength)
-		body := []byte{}
-		defer resp.Body.Close()
-		if contentLength >= 0 {
-			body = make([]byte, contentLength)
-			n, err := io.ReadFull(resp.Body, body)
-			if err != nil || (err == io.EOF && n < contentLength) {
-				proxyCtx.Logger.Errorf("failed to read response body (%d bytes read, %d bytes expected): %s", n, contentLength, err.Error())
-			}
-		} else {
-			err := error(nil)
-			body, err = ioutil.ReadAll(resp.Body)
-			if err != nil {
-				proxyCtx.Logger.Errorf("failed to read response body: %s", err.Error())
-			}
-		}
-		p := bytes.LastIndex(body, proxyCtx.Proxy.Ctx.InsertBefore)
-		if p > 0 {
-			newBody := make([]byte, 0, len(body)+len(proxyCtx.Proxy.Ctx.LabelHTML))
-			newBody = append(newBody, body[0:p]...)
-			newBody = append(newBody, proxyCtx.Proxy.Ctx.LabelHTML...)
-			newBody = append(newBody, body[p:]...)
-			body = newBody
-		}
-		newResp := new(http.Response)
-		*newResp = *resp
-		newResp.Body = ioutil.NopCloser(bytes.NewBuffer(body))
-		return newResp
-	} else {
-		return resp
+		proxyCtx.Resp = newResp
+		resp = newResp
 	}
+	return resp
 }
 
 func (proxy *OurProxyHttpServer) HandleNonProxyRequest(w http.ResponseWriter, r *http.Request) {
@@ -359,14 +305,15 @@ func (proxyCtx *OurProxyCtx) SendToClient(w http.ResponseWriter, resp *http.Resp
 
 func (proxy *OurProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	proxyCtx := &OurProxyCtx{
-		Proxy:    proxy,
-		Logger:   proxy.Logger,
-		OrigReq:  r,
-		Req:      r,
-		OrigResp: nil,
-		Resp:     nil,
-		Session:  atomic.AddInt64(&proxy.SessionSerial, 1),
-		Tr:       proxy.Tr,
+		Proxy:           proxy,
+		Logger:          proxy.Logger,
+		OrigReq:         r,
+		Req:             r,
+		OrigResp:        nil,
+		Resp:            nil,
+		Session:         atomic.AddInt64(&proxy.SessionSerial, 1),
+		Tr:              proxy.Tr,
+		ResponseFilters: proxy.ResponseFilters,
 	}
 	if r.Method == "CONNECT" {
 		hij, ok := w.(http.Hijacker)

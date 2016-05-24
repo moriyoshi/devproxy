@@ -14,6 +14,12 @@ tls:
     cert: testca.rsa.crt.pem
     key: testca.rsa.key.pem
 
+# response filters
+response_filters:
+  - type: label
+    html: '<div style="position:fixed;left:0;top:0;width:100%;background-color:#ff0">DEVELOPMENT</div>'
+    insert_before: "</body>"
+
 hosts:
   http://example.com:
     - ^(/static/.*)$: http://localhost:8081$1

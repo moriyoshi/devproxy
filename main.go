@@ -1479,29 +1479,39 @@ func (proxyCtx *OurProxyCtx) HandleConnect(r *http.Request, proxyClient net.Conn
 				return
 			}
 
+			nestedProxyCtx := new(OurProxyCtx)
+			*nestedProxyCtx = *proxyCtx
+			nestedProxyCtx.OrigReq = req
+			nestedProxyCtx.Req = req
+
 			req.URL.Scheme = "https"
 			req.URL.Host = targetHostPort
 			req.RequestURI = req.URL.String()
-			req, resp := perHostConfig.FilterRequest(req, proxyCtx)
+			req, resp := perHostConfig.FilterRequest(req, nestedProxyCtx)
+			nestedProxyCtx.Req = req
 
 			if resp == nil {
-				resp, err = proxyCtx.DoRequest(req, 0)
+				removeProxyHeaders(req)
+				resp, err = nestedProxyCtx.DoRequest(req, 0)
 				if err != nil {
-					proxyCtx.Logger.Errorf("failed to read response from the target (%s)", err.Error())
+					nestedProxyCtx.Logger.Errorf("failed to read response from the target (%s)", err.Error())
 					if _, err := clientTlsConn.Write(http10BadGatewayBytes); err != nil {
-						proxyCtx.Logger.Errorf("failed to send response to client (%s)", err.Error())
+						nestedProxyCtx.Logger.Errorf("failed to send response to client (%s)", err.Error())
 					}
 					return
 				}
 			}
-
-			resp = proxyCtx.FilterResponse(resp)
+			nestedProxyCtx.OrigResp = resp
+			resp = nestedProxyCtx.FilterResponse(resp)
+			resp.ContentLength = -1
+			if resp.Header != nil {
+				resp.Header.Del("Content-Length")
+			}
 			err = resp.Write(clientTlsConn)
 			if err != nil {
-				proxyCtx.Logger.Errorf("failed to send response to the client (%s)", err.Error())
-				return
+				nestedProxyCtx.Logger.Errorf("failed to send response to the client (%s)", err.Error())
 			}
-			break
+			return
 		}
 	}
 
@@ -1595,6 +1605,7 @@ func (proxy *OurProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		}
 		proxyCtx.OrigResp = resp
 		resp = proxyCtx.FilterResponse(resp)
+		resp.ContentLength = -1
 		if resp.Header != nil {
 			resp.Header.Del("Content-Length")
 		}

@@ -417,6 +417,9 @@ func FilterRequest(perHostConfig *PerHostConfig, r *http.Request, proxyCtx *OurP
 			proxyCtx.Logger.Error(err)
 		}
 		newUrl.User = r.URL.User
+		if newUrl.RawQuery == "" {
+			newUrl.RawQuery = r.URL.RawQuery
+		}
 		newRequest := CloneRequest(r)
 		newRequest.URL = newUrl
 		proxyCtx.Logger.Infof("%s %s => %s", r.Method, r.RequestURI, newRequest.URL.String())

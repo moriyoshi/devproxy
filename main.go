@@ -176,8 +176,9 @@ func (ctx *DevProxy) generateCertificate(hosts []string) (*tls.Certificate, erro
 	}
 	ca := ctx.Config.MITM.SigningCertificateKeyPair
 	ctx.Logger.Debugf("CA: CN=%s", ca.Certificate.Subject.CommonName)
-	start := time.Date(ctx.Now().Year(), 1, 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(ctx.Now().Year()+1, 1, 1, 0, 0, 0, 0, time.UTC)
+	year := ctx.Now().Year()
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(year+1, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	h := sha1.New()
 	h.Write([]byte(key))

@@ -398,6 +398,7 @@ func CloneRequest(r *http.Request) *http.Request {
 
 func FilterRequest(perHostConfig *PerHostConfig, r *http.Request, proxyCtx *OurProxyCtx) (*http.Request, *http.Response) {
 	newUrlString := ""
+	headerSets := (http.Header)(nil)
 	for _, pattern := range perHostConfig.Patterns {
 		submatchIndexes := pattern.Pattern.FindStringSubmatchIndex(r.URL.Path)
 		if submatchIndexes != nil {
@@ -408,6 +409,7 @@ func FilterRequest(perHostConfig *PerHostConfig, r *http.Request, proxyCtx *OurP
 				r.URL.Path,
 				submatchIndexes,
 			))
+			headerSets = pattern.Headers
 			break
 		}
 	}
@@ -422,6 +424,17 @@ func FilterRequest(perHostConfig *PerHostConfig, r *http.Request, proxyCtx *OurP
 		}
 		newRequest := CloneRequest(r)
 		newRequest.URL = newUrl
+		for headerName, headers := range headerSets {
+			if headers == nil {
+				delete(newRequest.Header, headerName)
+			} else {
+				existingHeaders, ok := newRequest.Header[headerName]
+				if ok {
+					headers = append(existingHeaders, headers...)
+				}
+				newRequest.Header[headerName] = headers
+			}
+		}
 		proxyCtx.Logger.Infof("%s %s => %s", r.Method, r.RequestURI, newRequest.URL.String())
 		return newRequest, nil
 	} else {

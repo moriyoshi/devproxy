@@ -27,3 +27,6 @@ hosts:
   https://example.com:
     - ^(/static/.*)$: http://localhost:8081$1
     - ^(/.*)$: http://localhost:8082$1
+      # you can add arbitrary headers to every request that matches the pattern
+      headers:
+        X-Forwarded-Proto: https  

@@ -45,6 +45,7 @@ import (
 	"github.com/cloudfoundry-incubator/candiedyaml"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -57,6 +58,7 @@ type ResponseFilterFactory func(*ConfigReaderContext, map[interface{}]interface{
 type Pattern struct {
 	Pattern      *regexp.Regexp
 	Substitution string
+	Headers  http.Header
 }
 
 type PerHostConfig struct {
@@ -185,23 +187,60 @@ func (ctx *ConfigReaderContext) extractPerHostConfigs(configMap map[string]inter
 			if !ok {
 				return nil, fmt.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
 			}
-			if len(__pattern) != 1 {
-				return nil, fmt.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
-			}
+			headers := make(http.Header)
+			patternOccurred := false
 			for _pattern, _substitution := range __pattern {
 				pattern, ok := _pattern.(string)
 				if !ok {
 					return nil, fmt.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
 				}
-				substitution, ok := _substitution.(string)
-				if !ok {
-					return nil, fmt.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
+				if pattern == "headers" {
+					__headers, ok := _substitution.(map[interface{}]interface{})
+					if !ok {
+						return nil, fmt.Errorf("%s: invalid structure under hosts/%s/%s", ctx.Filename, _url, pattern)
+					}
+					for _headerName, __values := range __headers {
+						headerName, ok := _headerName.(string)
+						if !ok {
+							return nil, fmt.Errorf("%s: invalid structure under hosts/%s/%s", ctx.Filename, _url, pattern)
+						}
+						values := ([]string)(nil)
+						if __values != nil {
+							_values, ok := __values.([]interface{})
+							if ok {
+								values = make([]string, len(_values))
+								for i, _header := range _values {
+									header, ok := _header.(string)
+									if !ok {
+										return nil, fmt.Errorf("%s: invalid structure under hosts/%s/%s/%s", ctx.Filename, _url, pattern, headerName)
+									}
+									values[i] = header
+								}
+							} else {
+								value, ok := __values.(string)
+								if !ok {
+									return nil, fmt.Errorf("%s: invalid structure under hosts/%s/%s/%s", ctx.Filename, _url, pattern, headerName)
+								}
+								values = []string{value}
+							}
+						}
+						headers[headerName] = values
+					}
+				} else {
+					if patternOccurred {
+						return nil, fmt.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
+					}
+					substitution, ok := _substitution.(string)
+					if !ok {
+						return nil, fmt.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
+					}
+					patternRegexp, err := regexp.Compile(pattern)
+					if err != nil {
+						return nil, fmt.Errorf("%s: invalid regexp %s for %s configuration", ctx.Filename, pattern, _url)
+					}
+					patterns = append(patterns, Pattern{Pattern: patternRegexp, Substitution: substitution, Headers: headers})
+					patternOccurred = true
 				}
-				patternRegexp, err := regexp.Compile(pattern)
-				if err != nil {
-					return nil, fmt.Errorf("%s: invalid regexp %s for %s configuration", ctx.Filename, pattern, _url)
-				}
-				patterns = append(patterns, Pattern{Pattern: patternRegexp, Substitution: substitution})
 			}
 		}
 		perHostConfigs[_url] = &PerHostConfig{Host: url, Patterns: patterns}

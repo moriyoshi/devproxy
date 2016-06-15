@@ -36,6 +36,7 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"github.com/Sirupsen/logrus"
 	"io"
@@ -73,7 +74,7 @@ type OurProxyCtx struct {
 }
 
 func makeHttp10Response(header string, body string) string {
-	return header + fmt.Sprintf("Content-Length: %d\r\n", len(body)) + "Connection: close\r\n\r\n" + body
+	return header + "\r\n" + fmt.Sprintf("Content-Length: %d\r\n", len(body)) + "Connection: close\r\n\r\n" + body
 }
 
 var contentTypeKey = http.CanonicalHeaderKey("Content-Type")
@@ -273,7 +274,7 @@ func (proxyCtx *OurProxyCtx) HandleConnect(r *http.Request, proxyClient net.Conn
 	}
 
 	proxyCtx.Logger.Debugf("Connecting to %s", targetHostPort)
-	targetConn, err := proxyCtx.Proxy.ConnectDial("tcp", targetHostPort)
+	targetConn, err := proxyCtx.Proxy.ConnectDial(targetHostPort)
 	if err != nil {
 		proxyCtx.Logger.Errorf("failed to connect to %s (%s)", targetHostPort, err.Error())
 		if _, err := proxyClient.Write(http10BadGatewayBytes); err != nil {
@@ -362,12 +363,82 @@ func (proxy *OurProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-/* copy and pasted from github.com/elazarl/goproxy */
-func (proxy *OurProxyHttpServer) ConnectDial(network, addr string) (net.Conn, error) {
-	if proxy.Tr.Dial != nil {
-		return proxy.Tr.Dial(network, addr)
+func buildFakeHTTPSRequestFromHostPortPair(addr string) *http.Request {
+	return &http.Request{
+		URL: &url.URL{
+			Scheme:   "https",
+			Opaque:   "",
+			User:     nil,
+			Host:     addr,
+			Path:     "",
+			RawPath:  "",
+			RawQuery: "",
+			Fragment: "",
+		},
 	}
-	return net.Dial(network, addr)
+}
+
+func (proxy *OurProxyHttpServer) doDial(addr string) (net.Conn, error) {
+	if proxy.Tr.Dial != nil {
+		return proxy.Tr.Dial("tcp", addr)
+	}
+	return net.Dial("tcp", addr)
+}
+
+func buildProxyRequestFromProxyURL(proxyUrl *url.URL, addr string) *http.Request {
+	retval := &http.Request{
+		Method: "CONNECT",
+		URL:    &url.URL{Opaque: addr},
+		Host:   addr,
+		Header: http.Header{},
+	}
+	if proxyUrl.User != nil {
+		retval.Header.Set(
+			"Proxy-Authorization",
+			fmt.Sprintf(
+				"Basic %s",
+				base64.StdEncoding.EncodeToString([]byte(proxyUrl.User.String())), // UTF-8
+			),
+		)
+	}
+	return retval
+}
+
+func (proxy *OurProxyHttpServer) ConnectDial(addr string) (net.Conn, error) {
+	proxyUrl, err := proxy.Tr.Proxy(buildFakeHTTPSRequestFromHostPortPair(addr))
+	if err != nil {
+		return nil, err // should we just propagate this to the caller?
+	}
+	if proxyUrl != nil {
+		proxyHostPortPair, err := toHostPortPair(proxyUrl)
+		if err != nil {
+			return nil, err // should we just propagate this to the caller?
+		}
+		proxyRequest := buildProxyRequestFromProxyURL(proxyUrl, addr)
+		conn, err := proxy.doDial(proxyHostPortPair.String())
+		if err != nil {
+			return nil, err // should we just propagate this to the caller?
+		}
+		somethingWentWrong := true // always be prepared to something bad
+		defer func() {
+			if somethingWentWrong {
+				conn.Close()
+			}
+		}()
+		proxyRequest.Write(conn)
+		br := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(br, proxyRequest)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("proxy server %s returned error status (%d) for tunneling request to %s", proxyUrl.String(), resp.StatusCode, addr)
+		}
+		somethingWentWrong = false // we are safe
+		return conn, nil
+	} else {
+		return proxy.doDial(addr)
+	}
 }
 
 func CloneHeader(orig http.Header) http.Header {

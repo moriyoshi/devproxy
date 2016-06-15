@@ -58,7 +58,7 @@ type ResponseFilterFactory func(*ConfigReaderContext, map[interface{}]interface{
 type Pattern struct {
 	Pattern      *regexp.Regexp
 	Substitution string
-	Headers  http.Header
+	Headers      http.Header
 }
 
 type PerHostConfig struct {
@@ -158,7 +158,7 @@ type ConfigReaderContext struct {
 func (ctx *ConfigReaderContext) extractPerHostConfigs(configMap map[string]interface{}) (map[string]*PerHostConfig, error) {
 	__hosts, ok := configMap["hosts"]
 	if !ok {
-		return nil, fmt.Errorf("%s: no hosts entry", ctx.Filename)
+		return make(map[string]*PerHostConfig), nil
 	}
 	_hosts, ok := __hosts.(map[interface{}]interface{})
 	if !ok {

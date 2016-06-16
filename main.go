@@ -43,6 +43,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Sirupsen/logrus"
+	"github.com/moriyoshi/devproxy/httpx"
 	"io"
 	"log"
 	"math/big"
@@ -116,23 +117,23 @@ func (ctx *DevProxy) proxyIsApplicable(req *http.Request) bool {
 	}
 }
 
-func (ctx *DevProxy) getProxyUrlForRequest(req *http.Request) (*url.URL, error) {
+func (ctx *DevProxy) getProxyUrlForRequest(req *http.Request) (*url.URL, *tls.Config, error) {
 	if !ctx.proxyIsApplicable(req) {
 		ctx.Logger.Debugf("No outbound proxy is applicable for %s", req.URL.String())
-		return nil, nil
+		return nil, nil, nil
 	}
 	if req.URL.Scheme == "https" {
 		if ctx.Config.Proxy.HTTPSProxy != nil {
-			return ctx.Config.Proxy.HTTPSProxy, nil
+			return ctx.Config.Proxy.HTTPSProxy, &ctx.Config.Proxy.TLSConfig, nil
 		}
 	}
 	// falls back to http
 	if req.URL.Scheme == "https" || req.URL.Scheme == "http" {
 		if ctx.Config.Proxy.HTTPProxy != nil {
-			return ctx.Config.Proxy.HTTPProxy, nil
+			return ctx.Config.Proxy.HTTPProxy, &ctx.Config.Proxy.TLSConfig, nil
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 func (ctx *DevProxy) newTLSConfigFactory() TLSConfigFactory {
@@ -153,16 +154,16 @@ func (ctx *DevProxy) newTLSConfigFactory() TLSConfigFactory {
 	}
 }
 
-func (ctx *DevProxy) newProxyURLBuilder() func(*http.Request) (*url.URL, error) {
-	return func(req *http.Request) (*url.URL, error) {
+func (ctx *DevProxy) newProxyURLBuilder() func(*http.Request) (*url.URL, *tls.Config, error) {
+	return func(req *http.Request) (*url.URL, *tls.Config, error) {
 		return ctx.getProxyUrlForRequest(req)
 	}
 }
 
-func (ctx *DevProxy) newHttpTransport() *http.Transport {
-	return &http.Transport{
+func (ctx *DevProxy) newHttpTransport() *httpx.Transport {
+	return &httpx.Transport{
 		TLSClientConfig: &ctx.Config.MITM.ClientTLSConfigTemplate,
-		Proxy:           ctx.newProxyURLBuilder(),
+		Proxy2:          ctx.newProxyURLBuilder(),
 	}
 }
 

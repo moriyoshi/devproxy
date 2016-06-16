@@ -80,6 +80,7 @@ type ProxyConfig struct {
 	HTTPSProxy    *url.URL
 	IncludedHosts []HostPortPair
 	ExcludedHosts []HostPortPair
+	TLSConfig     tls.Config
 }
 
 type Config struct {
@@ -364,6 +365,18 @@ func (ctx *ConfigReaderContext) extractProxyConfig(configMap map[string]interfac
 			retval.ExcludedHosts, err = convertUnparsedHostsIntoPairs(excludedHosts)
 			if err != nil {
 				err = fmt.Errorf("invalid host-port pair contained in NO_PROXY (%s)", err.Error())
+				return
+			}
+		}
+		__tlsConfig, ok := _proxy["tls"]
+		if ok {
+			_tlsConfig, ok := __tlsConfig.(map[interface{}]interface{})
+			if !ok {
+				err = fmt.Errorf("%s: invalid value for proxy/tls", ctx.Filename)
+				return
+			}
+			retval.TLSConfig, err = ctx.extractTLSConfig(_tlsConfig, "proxy/tls", true)
+			if err != nil {
 				return
 			}
 		}

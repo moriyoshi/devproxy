@@ -39,6 +39,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/Sirupsen/logrus"
+	"github.com/moriyoshi/devproxy/httpx"
 	"io"
 	"net"
 	"net/http"
@@ -54,7 +55,7 @@ type ResponseFilter interface {
 type OurProxyHttpServer struct {
 	Ctx              *DevProxy
 	Logger           *logrus.Logger
-	Tr               *http.Transport
+	Tr               *httpx.Transport
 	TLSConfigFactory TLSConfigFactory
 	ResponseFilters  []ResponseFilter
 	SessionSerial    int64
@@ -67,7 +68,7 @@ type OurProxyCtx struct {
 	Req             *http.Request
 	OrigResp        *http.Response
 	Resp            *http.Response
-	Tr              *http.Transport
+	Tr              *httpx.Transport
 	ResponseFilters []ResponseFilter
 	Error           error
 	Session         int64
@@ -385,6 +386,23 @@ func (proxy *OurProxyHttpServer) doDial(addr string) (net.Conn, error) {
 	return net.Dial("tcp", addr)
 }
 
+func (proxy *OurProxyHttpServer) doDialTLS(addr HostPortPair, tlsConfigTemplate *tls.Config) (net.Conn, error) {
+	if tlsConfigTemplate == nil {
+		if proxy.Tr.DialTLS != nil {
+			return proxy.Tr.DialTLS("tcp", addr.String())
+		}
+		tlsConfigTemplate = proxy.Tr.TLSClientConfig
+	}
+	conn, err := net.Dial("tcp", addr.String())
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig := new(tls.Config)
+	*tlsConfig = *tlsConfigTemplate
+	tlsConfig.ServerName = addr.Host
+	return tls.Client(conn, tlsConfig), nil
+}
+
 func buildProxyRequestFromProxyURL(proxyUrl *url.URL, addr string) *http.Request {
 	retval := &http.Request{
 		Method: "CONNECT",
@@ -405,7 +423,7 @@ func buildProxyRequestFromProxyURL(proxyUrl *url.URL, addr string) *http.Request
 }
 
 func (proxy *OurProxyHttpServer) ConnectDial(addr string) (net.Conn, error) {
-	proxyUrl, err := proxy.Tr.Proxy(buildFakeHTTPSRequestFromHostPortPair(addr))
+	proxyUrl, proxyTlsConfig, err := proxy.Tr.Proxy2(buildFakeHTTPSRequestFromHostPortPair(addr))
 	if err != nil {
 		return nil, err // should we just propagate this to the caller?
 	}
@@ -415,9 +433,17 @@ func (proxy *OurProxyHttpServer) ConnectDial(addr string) (net.Conn, error) {
 			return nil, err // should we just propagate this to the caller?
 		}
 		proxyRequest := buildProxyRequestFromProxyURL(proxyUrl, addr)
-		conn, err := proxy.doDial(proxyHostPortPair.String())
-		if err != nil {
-			return nil, err // should we just propagate this to the caller?
+		var conn net.Conn
+		if proxyUrl.Scheme == "https" {
+			conn, err = proxy.doDialTLS(proxyHostPortPair, proxyTlsConfig)
+			if err != nil {
+				return nil, err // should we just propagate this to the caller?
+			}
+		} else {
+			conn, err = proxy.doDial(proxyHostPortPair.String())
+			if err != nil {
+				return nil, err // should we just propagate this to the caller?
+			}
 		}
 		somethingWentWrong := true // always be prepared to something bad
 		defer func() {

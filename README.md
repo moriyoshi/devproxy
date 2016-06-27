@@ -11,21 +11,21 @@ It has the following features:
   If the upstream HTTP server listens on `127.0.0.1:3000` and you want to get your browser to access to it by a request to `http://example.com`, the configuration should look as follows:
 
   ```
-hosts:
+  hosts:
     http://example.com:
-        - ^(/*)$: http://127.0.0.1:3000$1
+      - ^(/*)$: http://127.0.0.1:3000$1
   ```
 
 * Transparent TLS wrapping (simulation of an SSL/TLS-enabled environment)
 
-  You can also make it possible to access to the upstream by hitting `https://example.com/` by adding the configuration like the following:
+  You can also make it possible to direct the request to `https://example.com/` to the upstream by adding the configuration like the following:
 
   ```
-hosts:
+  hosts:
     http://example.com:
-        - ^(/*)$: http://127.0.0.1:3000$1
+      - ^(/*)$: http://127.0.0.1:3000$1
     https://example.com:
-        - ^(/*)$: http://127.0.0.1:3000$1
+      - ^(/*)$: http://127.0.0.1:3000$1
   ```
 
   It is however necessary to set up the private PKI for issuing bogus server certificates and let your browser trust the PKI's root CA certificate.  **DO IT YOUR OWN RISK.**
@@ -33,12 +33,12 @@ hosts:
   The CA for issuing bogus server certificates is configured as follows:
 
   ```
-tls:
+  tls:
     ca:
-        cert: testca.rsa.crt.pem
-        key: testca.rsa.key.pem
-hosts:
-  ...
+      cert: testca.rsa.crt.pem
+      key: testca.rsa.key.pem
+  hosts:
+    ...
 ```
 
 * Request header modification
@@ -46,12 +46,12 @@ hosts:
   You can add / remove arbitrary request HTTP headers for the request being rewritten:
 
   ```
-hosts:
+  hosts:
     http://example.com:
-        - ^(/*)$: http://127.0.0.1:3000$1
-          headers:
-              X-Forwarded-Proto: https
-              Removed-Header: null
+      - ^(/*)$: http://127.0.0.1:3000$1
+        headers:
+          X-Forwarded-Proto: https
+          Removed-Header: null
 ```
 
 * Testing FastCGI-enabled upstream
@@ -59,13 +59,13 @@ hosts:
   You can forward the request to a FastCGI-enabled upstream:
 
   ```
-hosts:
+  hosts:
     http://example.com:
-        - ^(((?:/.*)*/[^/]+\.php)(/.*|$)): fastcgi://localhost$1
-          headers:
-              X-Cgi-Script-Filename: /var/www/document/root$2
-              X-Cgi-Script-Name: $2
-              X-Cgi-Path-Info: $3
+      - ^(((?:/.*)*/[^/]+\.php)(/.*|$)): fastcgi://localhost$1
+        headers:
+          X-Cgi-Script-Filename: /var/www/document/root$2
+          X-Cgi-Script-Name: $2
+          X-Cgi-Path-Info: $3
 ```
 
 

@@ -4,7 +4,7 @@
 
 devproxy is intended to be an easily configurable forward HTTP proxy for web application development.
 
-It has the following feature:
+It has the following features:
 
 * URL rewriting
 

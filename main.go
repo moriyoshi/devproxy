@@ -161,10 +161,12 @@ func (ctx *DevProxy) newProxyURLBuilder() func(*http.Request) (*url.URL, *tls.Co
 }
 
 func (ctx *DevProxy) newHttpTransport() *httpx.Transport {
-	return &httpx.Transport{
+	transport := &httpx.Transport{
 		TLSClientConfig: &ctx.Config.MITM.ClientTLSConfigTemplate,
 		Proxy2:          ctx.newProxyURLBuilder(),
 	}
+	transport.RegisterProtocol("fastcgi", &fastCGIRoundTripper{Logger: ctx.Logger})
+	return transport
 }
 
 func (ctx *DevProxy) generateCertificate(hosts []string) (*tls.Certificate, error) {

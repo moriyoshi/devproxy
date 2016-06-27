@@ -43,6 +43,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"sync/atomic"
 	"time"
@@ -506,7 +507,22 @@ func FilterRequest(perHostConfig *PerHostConfig, r *http.Request, proxyCtx *OurP
 				r.URL.Path,
 				submatchIndexes,
 			))
-			headerSets = pattern.Headers
+			headerSets = make(http.Header)
+			for headerName, headers := range pattern.Headers {
+				newHeaders := []string(nil)
+				if headers != nil {
+					newHeaders = make([]string, len(headers))
+					for i, header := range headers {
+						newHeaders[i] = string(pattern.Pattern.ExpandString(
+							make([]byte, 0, len(header)+len(r.URL.Path)),
+							header,
+							r.URL.Path,
+							submatchIndexes,
+						))
+					}
+				}
+				headerSets[textproto.CanonicalMIMEHeaderKey(headerName)] = newHeaders
+			}
 			break
 		}
 	}

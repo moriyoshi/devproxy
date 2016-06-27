@@ -30,3 +30,9 @@ hosts:
       # you can add arbitrary headers to every request that matches the pattern
       headers:
         X-Forwarded-Proto: https  
+  http://fastcgi.example.com:
+    - ^(((?:/.*)*/[^/]+\.php)(/.*|$)): fastcgi://localhost$1
+      headers:
+        X-Cgi-Script-Filename: /document_root$2
+        X-Cgi-Script-Name: $2
+        X-Cgi-Path-Info: $3

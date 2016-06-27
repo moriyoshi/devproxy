@@ -37,10 +37,13 @@ import (
 	"fmt"
 	"github.com/Sirupsen/logrus"
 	"github.com/moriyoshi/devproxy/fcgiclient"
+	"io"
 	"io/ioutil"
+	"math"
 	"net"
 	"net/http"
 	"net/textproto"
+	"strconv"
 )
 
 type fastCGIRoundTripper struct {
@@ -68,8 +71,10 @@ func (rt *fastCGIRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 		"SCRIPT_FILENAME": []byte(pop(req.Header, "X-Cgi-Script-Filename")),
 		"SCRIPT_NAME":     []byte(pop(req.Header, "X-Cgi-Script-Name")),
 		"PATH_INFO":       []byte(pop(req.Header, "X-Cgi-Path-Info")),
+		"PATH_TRANSLATED": []byte(pop(req.Header, "X-Cgi-Path-Translated")),
 		"SERVER_PROTOCOL": []byte(req.Proto),
 		"REMOTE_ADDR":     []byte(req.Header.Get("X-Forwarded-For")),
+		"CONTENT_TYPE":    []byte(req.Header.Get("Content-Type")),
 		"QUERY_STRING":    []byte(req.URL.RawQuery),
 	}
 	if req.Header.Get("X-Forwarded-Proto") == "https" {
@@ -97,10 +102,19 @@ func (rt *fastCGIRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	}
 	var reqBody []byte
 	if req.Body != nil {
-		reqBody, err = ioutil.ReadAll(req.Body)
+		if req.ContentLength == 0 {
+			reqBody, err = ioutil.ReadAll(req.Body)
+		} else {
+			if req.ContentLength > math.MaxInt32 {
+				return nil, fmt.Errorf("Request body too long (%d bytes)", req.ContentLength)
+			}
+			reqBody = make([]byte, int(req.ContentLength))
+			_, err = io.ReadAtLeast(req.Body, reqBody, int(req.ContentLength))
+		}
 		if err != nil {
 			return nil, err
 		}
+		env["CONTENT_LENGTH"] = []byte(strconv.Itoa(len(reqBody)))
 	}
 	respBytes, errBytes, err := fcgi.Request(env, reqBody, rt.reqId)
 	rt.reqId += 1

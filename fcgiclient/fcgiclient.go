@@ -237,7 +237,21 @@ func (this *FCGIClient) Request(env map[string][]byte, req []byte, reqId uint16)
 	if req == nil {
 		req = nullByteSlice
 	}
-	err = this.writeRecord(FCGI_STDIN, reqId, req)
+	for b := req; len(b) > 0; {
+		var l int
+		if len(b) < maxWrite {
+			l = len(b)
+		} else {
+			l = maxWrite
+		}
+		consumed := b[:l]
+		err = this.writeRecord(FCGI_STDIN, reqId, consumed)
+		if err != nil {
+			return
+		}
+		b = b[len(consumed):]
+	}
+	err = this.writeRecord(FCGI_STDIN, reqId, nullByteSlice)
 	if err != nil {
 		return
 	}

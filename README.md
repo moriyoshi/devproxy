@@ -28,7 +28,7 @@ It has the following features:
       - ^(/*)$: http://127.0.0.1:3000$1
   ```
 
-  It is however necessary to set up the private PKI for issuing bogus server certificates and let your browser trust the PKI's root CA certificate.  **DO IT YOUR OWN RISK.**
+  It is however necessary to set up the private PKI for issuing bogus server certificates and let your browser trust the PKI's root CA certificate.  **DO IT ON YOUR OWN RISK.**
 
   The CA for issuing bogus server certificates is configured as follows:
 

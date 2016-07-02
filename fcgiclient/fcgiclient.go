@@ -197,12 +197,16 @@ func (this *FCGIClient) writePairs(recType uint8, reqId uint16, pairs map[string
 }
 
 func grow(b []byte, s int, adjustLen bool) []byte {
-	if s < cap(b)-len(b) {
-		g := cap(b) >> 1
+	needed := len(b) + s
+	nc := cap(b)
+	for needed > nc {
+		g := nc >> 1
 		if s < 16 || g == 0 {
 			g = 16
 		}
-		nc := cap(b) + g
+		nc += g
+	}
+	if nc > cap(b) {
 		nb := make([]byte, len(b), nc)
 		copy(nb, b)
 		b = nb

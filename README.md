@@ -75,10 +75,10 @@ It has the following features:
   You can direct outgoing requests to another proxy server.  This is useful in a restricted network environment.
 
   ```
-proxy:
-  http: http://anoother-proxy-server:8080
-  https: http://another-proxy-server:8080
-```
+  proxy:
+    http: http://anoother-proxy-server:8080
+    https: http://another-proxy-server:8080
+  ```
 
   `excluded` directive can be used when you want to prevent the requests to the specific hosts from being proxied.
    

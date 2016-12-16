@@ -130,7 +130,7 @@ And Adjust your browser's proxy settings to what is exactly given to `-l` option
 ```
 openssl genrsa 2048 > testca.rsa.key.pem
 openssl req -new -key testca.rsa.key.pem -out testca.rsa.csr.pem
-openssl x509 -req -in testca.rsa.csr.pem -signkey testca.rsa.key.pem -days 3650 -extfile x509.ini -extensions CA -out testca.rsa.crt.pem
+openssl x509 -req -in testca.rsa.csr.pem -signkey testca.rsa.key.pem -days 3650 -sha256 -extfile x509.ini -extensions CA -out testca.rsa.crt.pem
 ```
 
 x509.ini:

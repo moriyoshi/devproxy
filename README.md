@@ -31,9 +31,9 @@ It has the following features:
   ```
 
   Even though you don't have a valid certificate prepared for `example.com`, devproxy automatically generates it on the fly.  However, it is necessary to set up the private PKI for issuing bogus server certificates and let your browser trust the PKI's root CA certificate.  **DO IT ON YOUR OWN RISK.**
-
+  
   The CA for issuing bogus server certificates is configured as follows:
-
+  
   ```
   tls:
     ca:
@@ -41,8 +41,8 @@ It has the following features:
       key: testca.rsa.key.pem
   hosts:
     ...
-```
-
+  ```
+  
 * Request header modification
 
   You can add / remove arbitrary request HTTP headers for the request being rewritten:
@@ -54,7 +54,7 @@ It has the following features:
         headers:
           X-Forwarded-Proto: https
           Removed-Header: null
-```
+  ```
 
 * Testing FastCGI-enabled upstream
   
@@ -68,7 +68,7 @@ It has the following features:
           X-Cgi-Script-Filename: /var/www/document/root$2
           X-Cgi-Script-Name: $2
           X-Cgi-Path-Info: $3
-```
+  ```
 
 * Proxy chaining
 
@@ -80,25 +80,25 @@ It has the following features:
     https: http://another-proxy-server:8080
   ```
 
-  `excluded` directive can be used when you want to prevent the requests to the specific hosts from being proxied.
+  `excluded` directive can be used when you want to prevent requests for the specific hosts from being proxied.
    
   ```
   excluded: 
     - 127.0.0.1
     - localhost
-    - intranet.example.com 
-```
-
+    - intranet.example.com
+  ```
+  
   Or inversely, in case of whitelisting:
 
   ```
-  included: 
+  included:
     - intranet.example.com
     - foobar.example.com
-```
-
+  ```
+  
   TLS proxy can also be specified.
-
+  
   ```
   proxy:
     http: https://anoother-proxy-server:8443
@@ -106,9 +106,9 @@ It has the following features:
     tls:
       ca_certs: cabundle.crt.pem
       certs:
-       - cert: client_crt.pem # this can be either the filename of a PEM-formatted certificate or a PEM string itself.
-         key: client_key.pem # this can be either the filename of a PEM-formatted private key or a PEM string itself.
-```
+        - cert: client_crt.pem # this can be either the filename of a PEM-formatted certificate or a PEM string itself.
+          key: client_key.pem # this can be either the filename of a PEM-formatted private key or a PEM string itself.
+  ```
 
 ## Installation
 

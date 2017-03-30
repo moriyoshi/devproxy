@@ -125,7 +125,7 @@ func (c *CertCache) readAndValidateCertificate(key string, hosts []string, now t
 		return nil, fmt.Errorf("Invalid certificate found in %s (%s)", path, err.Error())
 	}
 	if !now.Before(x509Cert.NotAfter) {
-		return nil, fmt.Errorf("Ceritificate no longer valid (not after: %s, now: %s)", x509Cert.NotAfter.Format(time.RFC1123), now.Format(time.RFC1123))
+		return nil, fmt.Errorf("Ceritificate no longer valid (not after: %s, now: %s)", x509Cert.NotAfter.Local().Format(time.RFC1123), now.Local().Format(time.RFC1123))
 	}
 
 outer:

@@ -44,6 +44,7 @@ import (
 	"fmt"
 	"github.com/Sirupsen/logrus"
 	"github.com/moriyoshi/devproxy/httpx"
+	"github.com/shibukawa/configdir"
 	"io"
 	"log"
 	"math/big"
@@ -51,8 +52,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -66,8 +68,7 @@ type DevProxy struct {
 	Config           *Config
 	DefaultCharset   string
 	CryptoRandReader io.Reader
-	Now              func() time.Time
-	certCache        map[string]*tls.Certificate
+	certCache        *CertCache
 }
 
 func (ctx *DevProxy) unidiTunnel(wg *sync.WaitGroup, connA net.Conn, connB net.Conn) {
@@ -143,8 +144,8 @@ func (ctx *DevProxy) newTLSConfigFactory() TLSConfigFactory {
 	return func(hostPortPairStr string, proxyCtx *OurProxyCtx) (*tls.Config, error) {
 		pair := splitHostPort(hostPortPairStr)
 		config := ctx.Config.MITM.ServerTLSConfigTemplate
-		ctx.Logger.Infof("Generate temporary certificate for %s", pair.Host)
-		cert, err := ctx.generateCertificate([]string{pair.Host})
+		ctx.Logger.Infof("Obtaining temporary certificate for %s", pair.Host)
+		cert, err := ctx.prepareMITMCertificate([]string{pair.Host})
 		if err != nil {
 			ctx.Logger.Warnf("Cannot sign host certificate with provided CA: %s", err)
 			return nil, err
@@ -169,22 +170,37 @@ func (ctx *DevProxy) newHttpTransport() *httpx.Transport {
 	return transport
 }
 
-func (ctx *DevProxy) generateCertificate(hosts []string) (*tls.Certificate, error) {
+var domainNameRegex = regexp.MustCompile("^[A-Za-z](?:[0-9A-Za-z-_]*[0-9A-Za-z])?$")
+
+func validateDomainName(host string) bool {
+	return domainNameRegex.MatchString(host)
+}
+
+func (ctx *DevProxy) prepareMITMCertificate(hosts []string) (*tls.Certificate, error) {
+	now, err := ctx.Config.NowGetter()
+	if err != nil {
+		return nil, err
+	}
 	sortedHosts := make([]string, len(hosts))
 	copy(sortedHosts, hosts)
 	sort.Strings(sortedHosts)
-	key := strings.Join(sortedHosts, ";")
-	if cert, ok := ctx.certCache[key]; ok {
+	cert, err := ctx.certCache.Get(sortedHosts, now)
+	if err != nil {
+		return nil, err
+	}
+	if cert != nil {
+		ctx.Logger.Infof("Obtained certificate from cache")
 		return cert, nil
 	}
 	ca := ctx.Config.MITM.SigningCertificateKeyPair
 	ctx.Logger.Debugf("CA: CN=%s", ca.Certificate.Subject.CommonName)
-	year := ctx.Now().Year()
-	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(year+1, 1, 1, 0, 0, 0, 0, time.UTC)
+	start := now.Add(-time.Minute)
+	end := now.Add(30 * 3600 * time.Hour)
 
 	h := sha1.New()
-	h.Write([]byte(key))
+	for _, host := range sortedHosts {
+		h.Write([]byte(host))
+	}
 	binary.Write(h, binary.BigEndian, start)
 	binary.Write(h, binary.BigEndian, end)
 	hash := h.Sum(nil)
@@ -214,11 +230,15 @@ func (ctx *DevProxy) generateCertificate(hosts []string) (*tls.Certificate, erro
 	if err != nil {
 		return nil, err
 	}
-	cert := &tls.Certificate{
+	cert = &tls.Certificate{
 		Certificate: [][]byte{derBytes, ca.Certificate.Raw},
 		PrivateKey:  ca.PrivateKey,
 	}
-	ctx.certCache[key] = cert
+	err = ctx.certCache.Put(sortedHosts, cert)
+	if err != nil {
+		ctx.Logger.Warnf("Failed to store the certificate to the cache: %s", err.Error())
+		return nil, err
+	}
 	return cert, nil
 }
 
@@ -282,7 +302,7 @@ func (ctx *DevProxy) Dispose() {
 func main() {
 	var listenOn string
 	var verbose bool
-	progname := os.Args[0]
+	progname := filepath.Base(os.Args[0])
 	flag.StringVar(&listenOn, "l", ":8080", "\"addr:port\" on which the server listens")
 	flag.BoolVar(&verbose, "v", false, "verbose output")
 	flag.Parse()
@@ -315,6 +335,17 @@ func main() {
 	if verbose {
 		logger.Level = logrus.DebugLevel
 	}
+	cacheDir := ""
+	if !config.MITM.DisableCache {
+		if config.MITM.CacheDirectory == "" {
+			c := configdir.New("github.com/moriyoshi", progname).QueryCacheFolder()
+			if c != nil {
+				cacheDir = c.Path
+			}
+		} else {
+			cacheDir = config.MITM.CacheDirectory
+		}
+	}
 	logWriter := logger.Writer()
 	ctx := DevProxy{
 		Logger:           logger,
@@ -323,8 +354,12 @@ func main() {
 		Config:           config,
 		DefaultCharset:   "UTF-8",
 		CryptoRandReader: crand.Reader,
-		Now:              time.Now,
-		certCache:        make(map[string]*tls.Certificate, 0),
+		certCache: NewCertCache(
+			cacheDir,
+			logger,
+			config.MITM.SigningCertificateKeyPair.Certificate,
+			config.MITM.SigningCertificateKeyPair.PrivateKey,
+		),
 	}
 	defer ctx.Dispose()
 	proxy := ctx.newProxyHttpServer()

@@ -51,6 +51,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type ResponseFilterFactory func(*ConfigReaderContext, map[interface{}]interface{}) (ResponseFilter, error)
@@ -73,6 +74,8 @@ type MITMConfig struct {
 		Certificate *x509.Certificate
 		PrivateKey  crypto.PrivateKey
 	}
+	CacheDirectory string
+	DisableCache   bool
 }
 
 type ProxyConfig struct {
@@ -88,6 +91,7 @@ type Config struct {
 	Proxy           ProxyConfig
 	MITM            MITMConfig
 	ResponseFilters []ResponseFilter
+	NowGetter       func() (time.Time, error)
 }
 
 var clientAuthTypeValues = map[string]tls.ClientAuthType{
@@ -908,6 +912,24 @@ func (ctx *ConfigReaderContext) extractMITMConfig(configMap map[string]interface
 			return
 		}
 		retval.SigningCertificateKeyPair.PrivateKey = tlsCert.PrivateKey
+		__cache_directory, ok := _tls["cache_directory"]
+		if ok {
+			_cache_directory, ok := __cache_directory.(string)
+			if !ok {
+				err = fmt.Errorf("%s: invalid structure under tls; cache_directory must be a string", ctx.Filename)
+				return
+			}
+			retval.CacheDirectory = _cache_directory
+		}
+		__disable_cache, ok := _tls["disable_cache"]
+		if ok {
+			_disable_cache, ok := __disable_cache.(bool)
+			if !ok {
+				err = fmt.Errorf("%s: invalid structure under tls; disable_cache must be a boolean", ctx.Filename)
+				return
+			}
+			retval.DisableCache = _disable_cache
+		}
 	}
 	return
 }
@@ -961,6 +983,10 @@ func (ctx *ConfigReaderContext) extractResponseFilters(configMap map[string]inte
 	return
 }
 
+func defaultNow() (time.Time, error) {
+	return time.Now(), nil
+}
+
 func loadConfig(yamlFile string, progname string) (*Config, error) {
 	f, err := os.Open(yamlFile)
 	if err != nil {
@@ -998,5 +1024,6 @@ func loadConfig(yamlFile string, progname string) (*Config, error) {
 		Proxy:           proxy,
 		MITM:            mitm,
 		ResponseFilters: responseFilters,
+		NowGetter:       defaultNow,
 	}, nil
 }

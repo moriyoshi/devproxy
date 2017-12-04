@@ -891,7 +891,7 @@ func (ctx *ConfigReaderContext) extractMITMConfig(configMap map[string]interface
 				err = fmt.Errorf("%s: invalid structure under tls/server", ctx.Filename)
 				return
 			}
-			retval.ClientTLSConfigTemplate, err = ctx.extractTLSConfig(_server, "tls/server", false)
+			retval.ServerTLSConfigTemplate, err = ctx.extractTLSConfig(_server, "tls/server", false)
 			if err != nil {
 				return
 			}

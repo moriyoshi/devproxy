@@ -307,18 +307,19 @@ func main() {
 	flag.BoolVar(&verbose, "v", false, "verbose output")
 	flag.Parse()
 	args := flag.Args()
-	if len(args) < 1 {
-		fmt.Fprintf(os.Stderr, "usage: %s -l [LISTEN] -v config\n", progname)
-		flag.PrintDefaults()
-		os.Exit(255)
-	}
-	config, err := loadConfig(args[0], progname)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s: %s\n", progname, err.Error())
-		os.Exit(1)
-	}
-	if len(config.Hosts) == 0 {
-		fmt.Fprintf(os.Stderr, "%s: warning: no patterns defined\n", progname)
+	var config *Config
+	var err error
+	if len(args) > 0 {
+		config, err = loadConfig(args[0], progname)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", progname, err.Error())
+			os.Exit(1)
+		}
+		if len(config.Hosts) == 0 {
+			fmt.Fprintf(os.Stderr, "%s: warning: no patterns defined\n", progname)
+		}
+	} else {
+		config = &Config{}
 	}
 	logger := &logrus.Logger{
 		Out: os.Stderr,

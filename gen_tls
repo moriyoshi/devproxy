@@ -1,0 +1,9 @@
+#!/bin/sh
+eval `go tool dist env`
+entries=`sed -n -E -e '/^const \(/,/^\)/ { s/^[[:space:]]*([^[:space:]=]*).*/\1/; /^(const|\)|\/\/)/ !{ /^TLS_FALLBACK_/ d; /^TLS/ { s/^TLS_(.*)/"&": tls.&,\\\\\\
+"\1": tls.&,\\\\/; p; }; }; }' "${GOROOT}/src/crypto/tls/cipher_suites.go"`
+out=`echo "${GOFILE}" | sed -e 's/\.template\././'`
+sed -E -e "/^\\/\\/(go:generate| \\+build)/ d; /\"HERE\"/ { i \\
+${entries}
+
+; d; }" "${GOFILE}" | gofmt > "${out}"

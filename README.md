@@ -13,7 +13,7 @@ It has the following features:
   ```
   hosts:
     http://example.com:
-      - ^(/*)$: http://127.0.0.1:3000$1
+      - ^(/.*)$: http://127.0.0.1:3000$1
   ```
 
   This can be done since the name resolution is done in devproxy, which is configured to map any request for http://example.com to http://127.0.0.1:3000.
@@ -25,9 +25,9 @@ It has the following features:
   ```
   hosts:
     http://example.com:
-      - ^(/*)$: http://127.0.0.1:3000$1
+      - ^(/.*)$: http://127.0.0.1:3000$1
     https://example.com:
-      - ^(/*)$: http://127.0.0.1:3000$1
+      - ^(/.*)$: http://127.0.0.1:3000$1
   ```
 
   Even though you don't have a valid certificate prepared for `example.com`, devproxy automatically generates it on the fly.  However, it is necessary to set up the private PKI for issuing bogus server certificates and let your browser trust the PKI's root CA certificate.  **DO IT ON YOUR OWN RISK.**
@@ -50,7 +50,7 @@ It has the following features:
   ```
   hosts:
     http://example.com:
-      - ^(/*)$: http://127.0.0.1:3000$1
+      - ^(/.*)$: http://127.0.0.1:3000$1
         headers:
           X-Forwarded-Proto: https
           Removed-Header: null

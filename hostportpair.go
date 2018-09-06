@@ -34,9 +34,10 @@
 package main
 
 import (
-	"fmt"
 	"net"
 	"net/url"
+
+	"github.com/pkg/errors"
 )
 
 type HostPortPair struct {
@@ -68,7 +69,7 @@ func toHostPortPair(url_ *url.URL) (HostPortPair, error) {
 	if pair.Port == "" {
 		defaultPort := defaultPortForScheme(url_.Scheme)
 		if defaultPort == "" {
-			return HostPortPair{}, fmt.Errorf("Unsupported URL scheme: %s", url_.Scheme)
+			return HostPortPair{}, errors.Errorf("Unsupported URL scheme: %s", url_.Scheme)
 		}
 		pair.Port = defaultPort
 	}

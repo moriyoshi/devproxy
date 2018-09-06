@@ -35,13 +35,14 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"math"
 	"mime"
 	"net/http"
 	"unsafe"
+
+	"github.com/pkg/errors"
 )
 
 type FilterRepositoryType struct {
@@ -78,13 +79,13 @@ func NewLabelFilter(ctx *ConfigReaderContext, configMap map[interface{}]interfac
 	if ok {
 		_htmlMediaTypes, ok := __htmlMediaTypes.([]interface{})
 		if !ok {
-			return nil, fmt.Errorf("invalid value for html_media_types")
+			return nil, errors.Errorf("invalid value for html_media_types")
 		}
 		htmlMediaTypes = make([]string, 0)
 		for _, _htmlMediaType := range _htmlMediaTypes {
 			htmlMediaType, ok := _htmlMediaType.(string)
 			if !ok {
-				return nil, fmt.Errorf("invalid value for html_media_types")
+				return nil, errors.Errorf("invalid value for html_media_types")
 			}
 			htmlMediaTypes = append(htmlMediaTypes, htmlMediaType)
 		}
@@ -95,7 +96,7 @@ func NewLabelFilter(ctx *ConfigReaderContext, configMap map[interface{}]interfac
 	if ok {
 		labelHTML, ok = _labelHTML.(string)
 		if !ok {
-			return nil, fmt.Errorf("invalid value for insert_before")
+			return nil, errors.Errorf("invalid value for insert_before")
 		}
 	}
 
@@ -104,7 +105,7 @@ func NewLabelFilter(ctx *ConfigReaderContext, configMap map[interface{}]interfac
 	if ok {
 		insertBefore, ok = _insertBefore.(string)
 		if !ok {
-			return nil, fmt.Errorf("invalid value for insert_before")
+			return nil, errors.Errorf("invalid value for insert_before")
 		}
 	}
 
@@ -152,7 +153,7 @@ func (ctx *LabelFilter) Filter(resp *http.Response, proxyCtx *OurProxyCtx) (*htt
 	}
 	if unsafe.Sizeof(resp.ContentLength) != unsafe.Sizeof(int(0)) {
 		if resp.ContentLength > math.MaxInt32 {
-			return nil, fmt.Errorf("failed to read response body (%d expected)", resp.ContentLength)
+			return nil, errors.Errorf("failed to read response body (%d expected)", resp.ContentLength)
 		}
 	}
 	contentLength := int(resp.ContentLength)
@@ -162,13 +163,13 @@ func (ctx *LabelFilter) Filter(resp *http.Response, proxyCtx *OurProxyCtx) (*htt
 		body = make([]byte, contentLength)
 		n, err := io.ReadFull(resp.Body, body)
 		if err != nil || (err == io.EOF && n < contentLength) {
-			return nil, fmt.Errorf("failed to read response body (%d bytes read, %d bytes expected): %s", n, contentLength, err.Error())
+			return nil, errors.Wrapf(err, "failed to read response body (%d bytes read, %d bytes expected)", n, contentLength)
 		}
 	} else {
 		err := error(nil)
 		body, err = ioutil.ReadAll(resp.Body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read response body: %s", err.Error())
+			return nil, errors.Wrapf(err, "failed to read response body")
 		}
 	}
 	p := bytes.LastIndex(body, ctx.InsertBefore)

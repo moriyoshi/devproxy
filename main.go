@@ -42,9 +42,6 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
-	"github.com/Sirupsen/logrus"
-	"github.com/moriyoshi/devproxy/httpx"
-	"github.com/shibukawa/configdir"
 	"io"
 	"log"
 	"math/big"
@@ -57,6 +54,11 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/Sirupsen/logrus"
+	"github.com/moriyoshi/devproxy/httpx"
+	"github.com/pkg/errors"
+	"github.com/shibukawa/configdir"
 )
 
 type TLSConfigFactory func(hostPortPairStr string, proxyCtx *OurProxyCtx) (*tls.Config, error)
@@ -162,8 +164,7 @@ func (ctx *DevProxy) newTLSConfigFactory() TLSConfigFactory {
 		ctx.Logger.Infof("Obtaining temporary certificate for %s", pair.Host)
 		cert, err := ctx.prepareMITMCertificate([]string{pair.Host})
 		if err != nil {
-			ctx.Logger.Warnf("Cannot sign host certificate with provided CA: %s", err)
-			return nil, err
+			return nil, errors.Wrapf(err, "cannot sign host certificate with provided CA")
 		}
 		config.Certificates = append(config.Certificates, *cert)
 		return &config, nil
@@ -194,14 +195,14 @@ func validateDomainName(host string) bool {
 func (ctx *DevProxy) prepareMITMCertificate(hosts []string) (*tls.Certificate, error) {
 	now, err := ctx.Config.NowGetter()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to retrieve the current time")
 	}
 	sortedHosts := make([]string, len(hosts))
 	copy(sortedHosts, hosts)
 	sort.Strings(sortedHosts)
 	cert, err := ctx.certCache.Get(sortedHosts, now)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to reetrieve a certificate that corresponds to [%v] from the cert cache", sortedHosts)
 	}
 	if cert != nil {
 		ctx.Logger.Infof("Obtained certificate from cache")
@@ -243,7 +244,7 @@ func (ctx *DevProxy) prepareMITMCertificate(hosts []string) (*tls.Certificate, e
 	}
 	derBytes, err := x509.CreateCertificate(ctx.CryptoRandReader, &template, ca.Certificate, ca.Certificate.PublicKey, ca.PrivateKey)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to create a certificate")
 	}
 	cert = &tls.Certificate{
 		Certificate: [][]byte{derBytes, ca.Certificate.Raw},
@@ -251,8 +252,7 @@ func (ctx *DevProxy) prepareMITMCertificate(hosts []string) (*tls.Certificate, e
 	}
 	err = ctx.certCache.Put(sortedHosts, cert)
 	if err != nil {
-		ctx.Logger.Warnf("Failed to store the certificate to the cache: %s", err.Error())
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to store the certificate to the cache")
 	}
 	return cert, nil
 }

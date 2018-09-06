@@ -34,7 +34,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"github.com/Sirupsen/logrus"
 	"github.com/moriyoshi/devproxy/fcgiclient"
 	"io"
@@ -44,6 +43,8 @@ import (
 	"net/http"
 	"net/textproto"
 	"strconv"
+
+	"github.com/pkg/errors"
 )
 
 type fastCGIRoundTripper struct {
@@ -106,7 +107,7 @@ func (rt *fastCGIRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 			reqBody, err = ioutil.ReadAll(req.Body)
 		} else {
 			if req.ContentLength > math.MaxInt32 {
-				return nil, fmt.Errorf("Request body too long (%d bytes)", req.ContentLength)
+				return nil, errors.Errorf("Request body too long (%d bytes)", req.ContentLength)
 			}
 			reqBody = make([]byte, int(req.ContentLength))
 			_, err = io.ReadAtLeast(req.Body, reqBody, int(req.ContentLength))
@@ -122,7 +123,7 @@ func (rt *fastCGIRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 		return nil, err
 	}
 	if errBytes != nil {
-		return nil, fmt.Errorf("Upstream returned error: %s", string(errBytes))
+		return nil, errors.Errorf("Upstream returned error: %s", string(errBytes))
 	}
 	headers, err := textproto.NewReader(bufio.NewReader(bytes.NewReader(respBytes))).ReadMIMEHeader()
 	if err != nil {

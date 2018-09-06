@@ -36,13 +36,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
-	"fmt"
-	"github.com/Sirupsen/logrus"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Sirupsen/logrus"
+	"github.com/pkg/errors"
 )
 
 type CertCache struct {
@@ -113,19 +114,19 @@ func (c *CertCache) readAndValidateCertificate(key string, hosts []string, now t
 		}
 	}
 	if certDerBytes == nil {
-		return nil, fmt.Errorf("No valid certificate contained in %s", path)
+		return nil, errors.Errorf("no valid certificate contained in %s", path)
 	}
 	x509Cert, err := x509.ParseCertificate(certDerBytes)
 	if err != nil {
-		return nil, fmt.Errorf("Invalid certificate found in %s (%s)", path, err.Error())
+		return nil, errors.Wrapf(err, "invalid certificate found in %s", path)
 	}
 	x509Cert.RawIssuer = c.issuerCert.Raw
 	err = x509Cert.CheckSignatureFrom(c.issuerCert)
 	if err != nil {
-		return nil, fmt.Errorf("Invalid certificate found in %s (%s)", path, err.Error())
+		return nil, errors.Wrapf(err, "invalid certificate found in %s", path)
 	}
 	if !now.Before(x509Cert.NotAfter) {
-		return nil, fmt.Errorf("Ceritificate no longer valid (not after: %s, now: %s)", x509Cert.NotAfter.Local().Format(time.RFC1123), now.Local().Format(time.RFC1123))
+		return nil, errors.Errorf("ceritificate no longer valid (not after: %s, now: %s)", x509Cert.NotAfter.Local().Format(time.RFC1123), now.Local().Format(time.RFC1123))
 	}
 
 outer:
@@ -135,7 +136,7 @@ outer:
 				break outer
 			}
 		}
-		return nil, fmt.Errorf("Certificate does not cover the host name %s", a)
+		return nil, errors.Errorf("certificate does not cover the host name %s", a)
 	}
 
 	return &tls.Certificate{

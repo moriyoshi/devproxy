@@ -143,7 +143,7 @@ func (ctx *ConfigReaderContext) extractPerHostConfigs(configMap map[string]inter
 			return nil, fmt.Errorf("%s: invalid value for URL (%s) under hosts/%s", ctx.Filename)
 		}
 		if url.Path != "" {
-			return nil, fmt.Errorf("%s: path many not be present: %s", ctx.Filename, _url)
+			return nil, fmt.Errorf("%s: path may not be present: %s", ctx.Filename, _url)
 		}
 		_patterns, ok := __patterns.([]interface{})
 		if !ok {

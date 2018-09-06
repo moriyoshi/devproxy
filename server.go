@@ -38,15 +38,17 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"github.com/Sirupsen/logrus"
-	"github.com/moriyoshi/devproxy/httpx"
 	"io"
 	"net"
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/Sirupsen/logrus"
+	"github.com/moriyoshi/devproxy/httpx"
 )
 
 type ResponseFilter interface {
@@ -75,14 +77,152 @@ type OurProxyCtx struct {
 	Session         int64
 }
 
+type ResponseWriter struct {
+	conn                   net.Conn
+	brw                    *bufio.ReadWriter
+	header                 http.Header
+	headerWritten          bool
+	protoMajor, protoMinor int
+}
+
 func makeHttp10Response(header string, body string) string {
 	return header + "\r\n" + fmt.Sprintf("Content-Length: %d\r\n", len(body)) + "Connection: close\r\n\r\n" + body
+}
+
+/* --- BEGIN pasted from src/net/http/header.go -- */
+
+func isTokenBoundary(b byte) bool {
+	return b == ' ' || b == ',' || b == '\t'
+}
+
+// hasToken reports whether token appears with v, ASCII
+// case-insensitive, with space or comma boundaries.
+// token must be all lowercase.
+// v may contain mixed cased.
+func hasToken(v, token string) bool {
+	if len(token) > len(v) || token == "" {
+		return false
+	}
+	if v == token {
+		return true
+	}
+	for sp := 0; sp <= len(v)-len(token); sp++ {
+		// Check that first character is good.
+		// The token is ASCII, so checking only a single byte
+		// is sufficient. We skip this potential starting
+		// position if both the first byte and its potential
+		// ASCII uppercase equivalent (b|0x20) don't match.
+		// False positives ('^' => '~') are caught by EqualFold.
+		if b := v[sp]; b != token[0] && b|0x20 != token[0] {
+			continue
+		}
+		// Check that start pos is on a valid token boundary.
+		if sp > 0 && !isTokenBoundary(v[sp-1]) {
+			continue
+		}
+		// Check that end pos is on a valid token boundary.
+		if endPos := sp + len(token); endPos != len(v) && !isTokenBoundary(v[endPos]) {
+			continue
+		}
+		if strings.EqualFold(v[sp:sp+len(token)], token) {
+			return true
+		}
+	}
+	return false
+}
+
+/* --- END pasted from src/net/http/client.go -- */
+
+func isWebSocketReq(req *http.Request) bool {
+	connHdr := req.Header.Get("Connection")
+	if hasToken(connHdr, "upgrade") {
+		upgradeHdr := req.Header.Get("Upgrade")
+		if strings.ToLower(upgradeHdr) == "websocket" {
+			return true
+		}
+	}
+	return false
+}
+
+func removeProxyHeaders(r *http.Request) {
+	r.RequestURI = ""
+	r.Header.Del("Proxy-Connection")
+	r.Header.Del("Proxy-Authenticate")
+	r.Header.Del("Proxy-Authorization")
+}
+
+func translateToWebsocketURL(u *url.URL) *url.URL {
+	v := *u
+	switch u.Scheme {
+	case "http":
+		v.Scheme = "ws"
+	case "https":
+		v.Scheme = "wss"
+	default:
+		return nil
+	}
+	return &v
 }
 
 var contentTypeKey = http.CanonicalHeaderKey("Content-Type")
 
 var http10BadGatewayBytes = []byte(makeHttp10Response("HTTP/1.0 502 Bad Gateway", "<html><body><h1>Bad Gateway</h1></body></html>"))
 var http10OkBytes = []byte("HTTP/1.0 200 OK\r\n\r\n")
+
+func NewResponseWriter(conn net.Conn, protoMajor, protoMinor int) *ResponseWriter {
+	return &ResponseWriter{
+		conn:   conn,
+		header: make(http.Header),
+		brw: bufio.NewReadWriter(
+			bufio.NewReader(conn),
+			bufio.NewWriter(conn),
+		),
+		protoMajor: protoMajor,
+		protoMinor: protoMinor,
+	}
+}
+
+func (rw *ResponseWriter) Header() http.Header {
+	return rw.header
+}
+
+func (rw *ResponseWriter) Write(b []byte) (int, error) {
+	if !rw.headerWritten {
+		rw.WriteHeader(http.StatusOK)
+	}
+	return rw.Write(b)
+}
+
+func (rw *ResponseWriter) WriteHeader(statusCode int) {
+	if rw.writeHeader(statusCode) != nil {
+		return
+	}
+	rw.headerWritten = true
+}
+
+func (rw *ResponseWriter) writeHeader(statusCode int) error {
+	statusText := http.StatusText(statusCode)
+	if statusText == "" {
+		statusText = fmt.Sprintf("status code %d", statusCode)
+	}
+	_, err := fmt.Fprintf(rw.brw, "HTTP/%d.%d %03d %s\r\n", rw.protoMajor, rw.protoMinor, statusCode, statusText)
+	if err != nil {
+		return err
+	}
+	err = rw.header.Write(rw.brw)
+	if err != nil {
+		return err
+	}
+	_, err = rw.brw.WriteString("\r\n")
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rw *ResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return rw.conn, rw.brw, nil
+}
 
 func (proxyCtx *OurProxyCtx) NewTLSConfig(r *http.Request) (*tls.Config, error) {
 	return proxyCtx.Proxy.TLSConfigFactory(r.URL.Host, proxyCtx)
@@ -144,58 +284,84 @@ func (b *cancelTimerBody) Close() error {
 
 /* --- END pasted from src/net/http/client.go -- */
 
-func (proxyCtx *OurProxyCtx) DoRequest(req *http.Request, timeout time.Duration) (*http.Response, error) {
+func (proxyCtx *OurProxyCtx) DoRequest(req *http.Request, respW http.ResponseWriter, timeout time.Duration) (*http.Response, error) {
 	defer func() {
 		if req.Body != nil {
 			req.Body.Close()
 		}
 	}()
 
-	timer := (*time.Timer)(nil)
-	canceled := int32(0)
-
-	if timeout > 0 {
-		timer = time.AfterFunc(timeout, func() {
-			atomic.StoreInt32(&canceled, 1)
-			proxyCtx.Tr.CancelRequest(req)
-		})
-	}
-
-	resp, err := proxyCtx.Tr.RoundTrip(req)
-	if err != nil {
-		if atomic.LoadInt32(&canceled) != 0 {
-			return nil, fmt.Errorf("%s: timeout exceeded", err.Error())
+	if isWebSocketReq(req) {
+		proxyCtx.Logger.Debugf("Handling WebSocket Handshake: %v", req.URL)
+		cm, err := proxyCtx.Tr.ConnectMethodForRequest(&httpx.TransportRequest{req, nil})
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
-	}
-
-	if timer != nil {
-		resp.Body = &cancelTimerBody{
-			t:        timer,
-			rc:       resp.Body,
-			canceled: &canceled,
+		obConn, _, err := proxyCtx.Tr.DoDial(cm)
+		if err != nil {
+			return nil, err
 		}
+		err = req.Write(obConn)
+		if err != nil {
+			obConn.Close()
+			return nil, err
+		}
+		hijacker, ok := respW.(http.Hijacker)
+		if !ok {
+			obConn.Close()
+			return nil, fmt.Errorf("responseWriter does not implement http.Hijacker")
+		}
+		ibConn, brw, err := hijacker.Hijack()
+		if err != nil {
+			obConn.Close()
+			return nil, err
+		}
+		err = brw.Flush()
+		if err != nil {
+			ibConn.Close()
+			obConn.Close()
+			return nil, err
+		}
+		if brw.Reader.Buffered() > 0 {
+			ibConn.Close()
+			obConn.Close()
+			return nil, fmt.Errorf("client sent data before handshake is complete")
+		}
+		proxyCtx.Logger.Debugf("Established bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
+		proxyCtx.Proxy.Ctx.bidiTunnel(obConn, ibConn)
+		proxyCtx.Logger.Debugf("Discarded bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
+		return nil, nil
+	} else {
+		timer := (*time.Timer)(nil)
+		canceled := int32(0)
+
+		if timeout > 0 {
+			timer = time.AfterFunc(timeout, func() {
+				atomic.StoreInt32(&canceled, 1)
+				proxyCtx.Tr.CancelRequest(req)
+			})
+		}
+
+		resp, err := proxyCtx.Tr.RoundTrip(req)
+		if err != nil {
+			if atomic.LoadInt32(&canceled) != 0 {
+				return nil, fmt.Errorf("%s: timeout exceeded", err.Error())
+			}
+			return nil, err
+		}
+
+		if timer != nil {
+			resp.Body = &cancelTimerBody{
+				t:        timer,
+				rc:       resp.Body,
+				canceled: &canceled,
+			}
+		}
+		return resp, nil
 	}
-	return resp, nil
 }
 
 func (proxyCtx *OurProxyCtx) HandleConnect(r *http.Request, proxyClient net.Conn) {
-	connClosers := []func() error{proxyClient.Close}
-	defer func() {
-		i := len(connClosers)
-		for {
-			i--
-			if i < 0 {
-				break
-			}
-			connCloser := connClosers[i]
-			err := connCloser()
-			if err != nil {
-				proxyCtx.Logger.Warnf("failed to close connection (%s)", err.Error())
-			}
-		}
-	}()
-
 	var targetHostPort string
 	{
 		pair := splitHostPort(r.URL.Host)
@@ -227,7 +393,11 @@ func (proxyCtx *OurProxyCtx) HandleConnect(r *http.Request, proxyClient net.Conn
 				proxyCtx.Logger.Errorf("TLS handshake with the client failed (%s)", err.Error())
 				return
 			}
-			connClosers[0] = clientTlsConn.Close
+			defer func() {
+				if err := clientTlsConn.Close(); err != nil {
+					proxyCtx.Logger.Warnf("failed to close connection (%s)", err.Error())
+				}
+			}()
 
 			clientBufReader := bufio.NewReader(clientTlsConn)
 			req, err := http.ReadRequest(clientBufReader)
@@ -252,7 +422,8 @@ func (proxyCtx *OurProxyCtx) HandleConnect(r *http.Request, proxyClient net.Conn
 
 			if resp == nil {
 				removeProxyHeaders(req)
-				resp, err = nestedProxyCtx.DoRequest(req, 0)
+				respW := NewResponseWriter(clientTlsConn, req.ProtoMajor, req.ProtoMinor)
+				resp, err = nestedProxyCtx.DoRequest(req, respW, 0)
 				if err != nil {
 					nestedProxyCtx.Logger.Errorf("failed to read response from the target (%s)", err.Error())
 					if _, err := clientTlsConn.Write(http10BadGatewayBytes); err != nil {
@@ -284,7 +455,11 @@ func (proxyCtx *OurProxyCtx) HandleConnect(r *http.Request, proxyClient net.Conn
 		}
 		return
 	}
-	connClosers = append(connClosers, targetConn.Close)
+	defer func() {
+		if err := targetConn.Close(); err != nil {
+			proxyCtx.Logger.Warnf("failed to close connection (%s)", err.Error())
+		}
+	}()
 	_, err = proxyClient.Write(http10OkBytes)
 	if err != nil {
 		proxyCtx.Logger.Errorf("failed to send response to client (%s)", err.Error())
@@ -342,26 +517,32 @@ func (proxy *OurProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		proxyCtx.Req = r
 		if resp == nil {
 			removeProxyHeaders(r)
-			resp, err = proxyCtx.DoRequest(r, 0)
+			resp, err = proxyCtx.DoRequest(r, w, 0)
 			if err != nil {
+				proxyCtx.Logger.Errorf("Error occurred during handling request: %v", err)
 				proxyCtx.Error = err
 				resp = proxyCtx.FilterResponse(nil)
 				if resp == nil {
-					proxyCtx.Logger.Errorf("error read response %v %v:", r.URL.Host, err.Error())
 					http.Error(w, err.Error(), 500)
 					return
 				}
 			}
-			proxyCtx.Logger.Debugf("Received response %v", resp.Status)
+			if resp != nil {
+				proxyCtx.Logger.Debugf("Received response %v", resp.Status)
+			}
 		}
 		proxyCtx.OrigResp = resp
-		resp = proxyCtx.FilterResponse(resp)
-		resp.ContentLength = -1
-		if resp.Header != nil {
-			resp.Header.Del("Content-Length")
+		if resp != nil {
+			resp = proxyCtx.FilterResponse(resp)
+			resp.ContentLength = -1
+			if resp.Header != nil {
+				resp.Header.Del("Content-Length")
+			}
+			proxyCtx.Logger.Debugf("Copying response to client %v [%d]", resp.Status, resp.StatusCode)
+			proxyCtx.SendToClient(w, resp)
+		} else {
+			proxyCtx.Logger.Debugf("No response is available")
 		}
-		proxyCtx.Logger.Debugf("Copying response to client %v [%d]", resp.Status, resp.StatusCode)
-		proxyCtx.SendToClient(w, resp)
 	}
 }
 
@@ -554,12 +735,4 @@ func FilterRequest(perHostConfig *PerHostConfig, r *http.Request, proxyCtx *OurP
 		proxyCtx.Logger.Infof("%s %s", r.Method, r.RequestURI)
 		return r, nil
 	}
-}
-
-func removeProxyHeaders(r *http.Request) {
-	r.RequestURI = ""
-	r.Header.Del("Proxy-Connection")
-	r.Header.Del("Proxy-Authenticate")
-	r.Header.Del("Proxy-Authorization")
-	r.Header.Del("Connection")
 }

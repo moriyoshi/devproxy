@@ -369,16 +369,16 @@ func ProxyURL(fixedURL *url.URL) func(*http.Request) (*url.URL, error) {
 
 // transportRequest is a wrapper around a *http.Request that adds
 // optional extra headers to write.
-type transportRequest struct {
+type TransportRequest struct {
 	*http.Request             // original request, not to be mutated
-	extra         http.Header // extra headers to write, or nil
+	Extra         http.Header // extra headers to write, or nil
 }
 
-func (tr *transportRequest) extraHeaders() http.Header {
-	if tr.extra == nil {
-		tr.extra = make(http.Header)
+func (tr *TransportRequest) extraHeaders() http.Header {
+	if tr.Extra == nil {
+		tr.Extra = make(http.Header)
 	}
-	return tr.extra
+	return tr.Extra
 }
 
 // RoundTrip implements the RoundTripper interface.
@@ -411,8 +411,8 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 		closeBody(req)
 		return nil, errors.New("http: no Host in request URL")
 	}
-	treq := &transportRequest{Request: req}
-	cm, err := t.connectMethodForRequest(treq)
+	treq := &TransportRequest{Request: req}
+	cm, err := t.ConnectMethodForRequest(treq)
 	if err != nil {
 		closeBody(req)
 		return nil, err
@@ -528,24 +528,24 @@ func (e *envOnce) reset() {
 	e.val = ""
 }
 
-func (t *Transport) connectMethodForRequest(treq *transportRequest) (cm connectMethod, err error) {
-	cm.targetScheme = treq.URL.Scheme
-	cm.targetAddr = canonicalAddr(treq.URL)
+func (t *Transport) ConnectMethodForRequest(treq *TransportRequest) (cm ConnectMethod, err error) {
+	cm.TargetScheme = treq.URL.Scheme
+	cm.TargetAddr = canonicalAddr(treq.URL)
 	if t.Proxy2 != nil {
-		cm.proxyURL, cm.proxyTLSConfig, err = t.Proxy2(treq.Request)
+		cm.ProxyURL, cm.ProxyTLSConfig, err = t.Proxy2(treq.Request)
 	} else if t.Proxy != nil {
-		cm.proxyURL, err = t.Proxy(treq.Request)
+		cm.ProxyURL, err = t.Proxy(treq.Request)
 	}
 	return cm, err
 }
 
 // proxyAuth returns the Proxy-Authorization header to set
 // on requests, if applicable.
-func (cm *connectMethod) proxyAuth() string {
-	if cm.proxyURL == nil {
+func (cm *ConnectMethod) ProxyAuth() string {
+	if cm.ProxyURL == nil {
 		return ""
 	}
-	if u := cm.proxyURL.User; u != nil {
+	if u := cm.ProxyURL.User; u != nil {
 		username := u.Username()
 		password, _ := u.Password()
 		return "Basic " + basicAuth(username, password)
@@ -613,9 +613,9 @@ func (t *Transport) putIdleConn(pconn *persistConn) bool {
 }
 
 // getIdleConnCh returns a channel to receive and return idle
-// persistent connection for the given connectMethod.
+// persistent connection for the given ConnectMethod.
 // It may return nil, if persistent connections are not being used.
-func (t *Transport) getIdleConnCh(cm connectMethod) chan *persistConn {
+func (t *Transport) getIdleConnCh(cm ConnectMethod) chan *persistConn {
 	if t.DisableKeepAlives {
 		return nil
 	}
@@ -634,7 +634,7 @@ func (t *Transport) getIdleConnCh(cm connectMethod) chan *persistConn {
 	return ch
 }
 
-func (t *Transport) getIdleConn(cm connectMethod) (pconn *persistConn) {
+func (t *Transport) getIdleConn(cm ConnectMethod) (pconn *persistConn) {
 	key := cm.key()
 	t.idleMu.Lock()
 	defer t.idleMu.Unlock()
@@ -704,10 +704,10 @@ func (t *Transport) dial(network, addr string) (c net.Conn, err error) {
 var prePendingDial, postPendingDial func()
 
 // getConn dials and creates a new persistConn to the target as
-// specified in the connectMethod.  This includes doing a proxy CONNECT
+// specified in the ConnectMethod.  This includes doing a proxy CONNECT
 // and/or setting up TLS.  If this doesn't return an error, the persistConn
 // is ready to write requests to.
-func (t *Transport) getConn(req *http.Request, cm connectMethod) (*persistConn, error) {
+func (t *Transport) getConn(req *http.Request, cm ConnectMethod) (*persistConn, error) {
 	if pc := t.getIdleConn(cm); pc != nil {
 		// set request canceler to some non-nil function so we
 		// can detect whether it was cleared between now and when
@@ -771,31 +771,17 @@ func (t *Transport) getConn(req *http.Request, cm connectMethod) (*persistConn, 
 	}
 }
 
-func (t *Transport) dialConn(cm connectMethod) (*persistConn, error) {
-	pconn := &persistConn{
-		t:          t,
-		cacheKey:   cm.key(),
-		reqch:      make(chan requestAndChan, 1),
-		writech:    make(chan writeRequest, 1),
-		closech:    make(chan struct{}),
-		writeErrCh: make(chan error, 1),
-	}
-	tlsDial := t.DialTLS != nil && cm.targetScheme == "https" && cm.proxyURL == nil
+func (t *Transport) DoDial(cm ConnectMethod) (conn net.Conn, isProxy bool, err error) {
+	tlsDial := t.DialTLS != nil && cm.TargetScheme == "https" && cm.ProxyURL == nil
 	if tlsDial {
 		var err error
-		pconn.conn, err = t.DialTLS("tcp", cm.addr())
+		conn, err = t.DialTLS("tcp", cm.addr())
 		if err != nil {
-			return nil, err
-		}
-		if tc, ok := pconn.conn.(*tls.Conn); ok {
-			cs := tc.ConnectionState()
-			pconn.tlsState = &cs
+			return nil, false, err
 		}
 	} else {
-		var conn net.Conn
-		var err error
-		proxyTLSConfigTemlate := cm.proxyTLSConfig
-		tlsProxy := cm.proxyURL != nil && cm.proxyURL.Scheme == "https"
+		proxyTLSConfigTemlate := cm.ProxyTLSConfig
+		tlsProxy := cm.ProxyURL != nil && cm.ProxyURL.Scheme == "https"
 		if tlsProxy {
 			if proxyTLSConfigTemlate == nil {
 				if t.DialTLS != nil {
@@ -808,44 +794,37 @@ func (t *Transport) dialConn(cm connectMethod) (*persistConn, error) {
 		if conn == nil {
 			conn, err = t.dial("tcp", cm.addr())
 			if err != nil {
-				if cm.proxyURL != nil {
-					err = fmt.Errorf("http: error connecting to proxy %s: %v", cm.proxyURL, err)
+				if cm.ProxyURL != nil {
+					err = fmt.Errorf("http: error connecting to proxy %s: %v", cm.ProxyURL, err)
 				}
-				return nil, err
+				return nil, false, err
 			}
 			if tlsProxy {
 				proxyTLSConfig := new(tls.Config)
 				*proxyTLSConfig = *proxyTLSConfigTemlate
-				host, _, err := net.SplitHostPort(cm.proxyURL.Host)
+				host, _, err := net.SplitHostPort(cm.ProxyURL.Host)
 				if err == nil {
 					proxyTLSConfig.ServerName = host
 				}
 				conn = tls.Client(conn, proxyTLSConfig)
 			}
 		}
-		pconn.conn = conn
 	}
 
 	// Proxy setup.
 	switch {
-	case cm.proxyURL == nil:
+	case cm.ProxyURL == nil:
 		// Do nothing. Not using a proxy.
-	case cm.targetScheme == "http":
-		pconn.isProxy = true
-		if pa := cm.proxyAuth(); pa != "" {
-			pconn.mutateHeaderFunc = func(h http.Header) {
-				h.Set("Proxy-Authorization", pa)
-			}
-		}
-	case cm.targetScheme == "https":
-		conn := pconn.conn
+	case cm.TargetScheme == "http":
+		isProxy = true
+	case cm.TargetScheme == "https":
 		connectReq := &http.Request{
 			Method: "CONNECT",
-			URL:    &url.URL{Opaque: cm.targetAddr},
-			Host:   cm.targetAddr,
+			URL:    &url.URL{Opaque: cm.TargetAddr},
+			Host:   cm.TargetAddr,
 			Header: make(http.Header),
 		}
-		if pa := cm.proxyAuth(); pa != "" {
+		if pa := cm.ProxyAuth(); pa != "" {
 			connectReq.Header.Set("Proxy-Authorization", pa)
 		}
 		connectReq.Write(conn)
@@ -854,26 +833,28 @@ func (t *Transport) dialConn(cm connectMethod) (*persistConn, error) {
 		// Okay to use and discard buffered reader here, because
 		// TLS server will not speak until spoken to.
 		br := bufio.NewReader(conn)
-		resp, err := http.ReadResponse(br, connectReq)
+		var resp *http.Response
+		resp, err = http.ReadResponse(br, connectReq)
 		if err != nil {
 			conn.Close()
-			return nil, err
+			return
 		}
 		if resp.StatusCode != 200 {
 			f := strings.SplitN(resp.Status, " ", 2)
 			conn.Close()
-			return nil, errors.New(f[1])
+			err = errors.New(f[1])
+			return
 		}
 	}
 
-	if cm.targetScheme == "https" && !tlsDial {
+	if cm.TargetScheme == "https" && !tlsDial {
 		// Initiate TLS and check remote host name against certificate.
 		cfg := cloneTLSClientConfig(t.TLSClientConfig)
 		if cfg.ServerName == "" {
 			cfg.ServerName = cm.tlsHost()
 		}
-		plainConn := pconn.conn
-		tlsConn := tls.Client(plainConn, cfg)
+		plainConn := conn
+		tlsConn := tls.Client(conn, cfg)
 		errc := make(chan error, 2)
 		var timer *time.Timer // for canceling TLS handshake
 		if d := t.TLSHandshakeTimeout; d != 0 {
@@ -888,21 +869,46 @@ func (t *Transport) dialConn(cm connectMethod) (*persistConn, error) {
 			}
 			errc <- err
 		}()
-		if err := <-errc; err != nil {
+		if err = <-errc; err != nil {
 			plainConn.Close()
-			return nil, err
+			return
 		}
 		if !cfg.InsecureSkipVerify {
-			if err := tlsConn.VerifyHostname(cfg.ServerName); err != nil {
+			if err = tlsConn.VerifyHostname(cfg.ServerName); err != nil {
 				plainConn.Close()
-				return nil, err
+				return
 			}
 		}
-		cs := tlsConn.ConnectionState()
-		pconn.tlsState = &cs
-		pconn.conn = tlsConn
+		conn = tlsConn
 	}
+	return
+}
 
+func (t *Transport) dialConn(cm ConnectMethod) (*persistConn, error) {
+	pconn := &persistConn{
+		t:          t,
+		cacheKey:   cm.key(),
+		reqch:      make(chan requestAndChan, 1),
+		writech:    make(chan writeRequest, 1),
+		closech:    make(chan struct{}),
+		writeErrCh: make(chan error, 1),
+	}
+	var err error
+	pconn.conn, pconn.isProxy, err = t.DoDial(cm)
+	if err != nil {
+		return nil, err
+	}
+	if tc, ok := pconn.conn.(*tls.Conn); ok {
+		cs := tc.ConnectionState()
+		pconn.tlsState = &cs
+	}
+	if pconn.isProxy {
+		if pa := cm.ProxyAuth(); pa != "" {
+			pconn.mutateHeaderFunc = func(h http.Header) {
+				h.Set("Proxy-Authorization", pa)
+			}
+		}
+	}
 	pconn.br = bufio.NewReader(noteEOFReader{pconn.conn, &pconn.sawEOF})
 	pconn.bw = bufio.NewWriter(pconn.conn)
 	go pconn.readLoop()
@@ -963,7 +969,7 @@ func useProxy(addr string) bool {
 	return true
 }
 
-// connectMethod is the map key (in its String form) for keeping persistent
+// ConnectMethod is the map key (in its String form) for keeping persistent
 // TCP connections alive for subsequent HTTP requests.
 //
 // A connect method may be of the following types:
@@ -977,49 +983,49 @@ func useProxy(addr string) bool {
 //
 // Note: no support to https to the proxy yet.
 //
-type connectMethod struct {
-	proxyURL       *url.URL    // nil for no proxy, else full proxy URL
-	proxyTLSConfig *tls.Config // TLS config for proxy
-	targetScheme   string      // "http" or "https"
-	targetAddr     string      // Not used if proxy + http targetScheme (4th example in table)
+type ConnectMethod struct {
+	ProxyURL       *url.URL    // nil for no proxy, else full proxy URL
+	ProxyTLSConfig *tls.Config // TLS config for proxy
+	TargetScheme   string      // "http" or "https"
+	TargetAddr     string      // Not used if proxy + http targetScheme (4th example in table)
 }
 
-func (cm *connectMethod) key() connectMethodKey {
+func (cm *ConnectMethod) key() connectMethodKey {
 	proxyStr := ""
-	targetAddr := cm.targetAddr
-	if cm.proxyURL != nil {
-		proxyStr = cm.proxyURL.String()
-		if cm.targetScheme == "http" {
+	targetAddr := cm.TargetAddr
+	if cm.ProxyURL != nil {
+		proxyStr = cm.ProxyURL.String()
+		if cm.TargetScheme == "http" {
 			targetAddr = ""
 		}
 	}
 	return connectMethodKey{
 		proxy:         proxyStr,
-		scheme:        cm.targetScheme,
+		scheme:        cm.TargetScheme,
 		addr:          targetAddr,
-		tlsConfigAddr: uintptr(unsafe.Pointer(cm.proxyTLSConfig)),
+		tlsConfigAddr: uintptr(unsafe.Pointer(cm.ProxyTLSConfig)),
 	}
 }
 
 // addr returns the first hop "host:port" to which we need to TCP connect.
-func (cm *connectMethod) addr() string {
-	if cm.proxyURL != nil {
-		return canonicalAddr(cm.proxyURL)
+func (cm *ConnectMethod) addr() string {
+	if cm.ProxyURL != nil {
+		return canonicalAddr(cm.ProxyURL)
 	}
-	return cm.targetAddr
+	return cm.TargetAddr
 }
 
 // tlsHost returns the host name to match against the peer's
 // TLS certificate.
-func (cm *connectMethod) tlsHost() string {
-	h := cm.targetAddr
+func (cm *ConnectMethod) tlsHost() string {
+	h := cm.TargetAddr
 	if hasPort(h) {
 		h = h[:strings.LastIndex(h, ":")]
 	}
 	return h
 }
 
-// connectMethodKey is the map key version of connectMethod, with a
+// connectMethodKey is the map key version of ConnectMethod, with a
 // stringified proxy URL (or the empty string) instead of a pointer to
 // a URL.
 type connectMethodKey struct {
@@ -1238,7 +1244,7 @@ func (pc *persistConn) writeLoop() {
 				wr.ch <- errors.New("http: can't write HTTP request on broken connection")
 				continue
 			}
-			err := doWriteRequest(wr.req.Request, pc.bw, pc.isProxy, wr.req.extra)
+			err := doWriteRequest(wr.req.Request, pc.bw, pc.isProxy, wr.req.Extra)
 			if err == nil {
 				err = pc.bw.Flush()
 			}
@@ -1302,7 +1308,7 @@ type requestAndChan struct {
 // concurrently waits on both the write response and the server's
 // reply.
 type writeRequest struct {
-	req *transportRequest
+	req *TransportRequest
 	ch  chan<- error
 }
 
@@ -1327,7 +1333,7 @@ var (
 	testHookReadLoopBeforeNextRead  func()
 )
 
-func (pc *persistConn) roundTrip(req *transportRequest) (resp *http.Response, err error) {
+func (pc *persistConn) roundTrip(req *TransportRequest) (resp *http.Response, err error) {
 	if hook := testHookEnterRoundTrip; hook != nil {
 		hook()
 	}

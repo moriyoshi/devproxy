@@ -71,11 +71,18 @@ type DevProxy struct {
 	certCache        *CertCache
 }
 
-func (ctx *DevProxy) unidiTunnel(wg *sync.WaitGroup, connA net.Conn, connB net.Conn) {
-	defer wg.Done()
+func isTimeout(e error) bool {
+	t, ok := e.(interface{ Timeout() bool })
+	if !ok {
+		return false
+	}
+	return t.Timeout()
+}
+
+func (ctx *DevProxy) unidiTunnel(connA net.Conn, connB net.Conn) {
 	n, err := io.Copy(connA, connB)
-	msg := fmt.Sprintf("%d bytes transferred from %s to %s", n, connA, connB)
-	if err != nil && err != io.EOF {
+	msg := fmt.Sprintf("%d bytes transferred from %v to %v", n, connA.RemoteAddr(), connB.RemoteAddr())
+	if err != nil && err != io.EOF && !isTimeout(err) {
 		ctx.Logger.Errorf("%s; %s", err.Error(), msg)
 	} else {
 		ctx.Logger.Debug(msg)
@@ -85,9 +92,17 @@ func (ctx *DevProxy) unidiTunnel(wg *sync.WaitGroup, connA net.Conn, connB net.C
 func (ctx *DevProxy) bidiTunnel(connA net.Conn, connB net.Conn) {
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
-	go ctx.unidiTunnel(wg, connA, connB)
+	go func() {
+		ctx.unidiTunnel(connA, connB)
+		connA.SetDeadline(time.Unix(0, 0))
+		connB.SetDeadline(time.Unix(0, 0))
+	}()
 	wg.Add(1)
-	go ctx.unidiTunnel(wg, connB, connA)
+	go func() {
+		ctx.unidiTunnel(connB, connA)
+		connA.SetDeadline(time.Unix(0, 0))
+		connB.SetDeadline(time.Unix(0, 0))
+	}()
 	wg.Wait()
 }
 

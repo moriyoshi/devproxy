@@ -780,14 +780,14 @@ func (t *Transport) DoDial(cm ConnectMethod) (conn net.Conn, isProxy bool, err e
 			return nil, false, err
 		}
 	} else {
-		proxyTLSConfigTemlate := cm.ProxyTLSConfig
+		proxyTLSConfigTemplate := cm.ProxyTLSConfig
 		tlsProxy := cm.ProxyURL != nil && cm.ProxyURL.Scheme == "https"
 		if tlsProxy {
-			if proxyTLSConfigTemlate == nil {
+			if proxyTLSConfigTemplate == nil {
 				if t.DialTLS != nil {
 					conn, err = t.DialTLS("tcp", cm.addr())
 				} else {
-					proxyTLSConfigTemlate = t.TLSClientConfig
+					proxyTLSConfigTemplate = t.TLSClientConfig
 				}
 			}
 		}
@@ -800,8 +800,10 @@ func (t *Transport) DoDial(cm ConnectMethod) (conn net.Conn, isProxy bool, err e
 				return nil, false, err
 			}
 			if tlsProxy {
-				proxyTLSConfig := new(tls.Config)
-				*proxyTLSConfig = *proxyTLSConfigTemlate
+				if proxyTLSConfigTemplate == nil {
+					return nil, false, fmt.Errorf("http: no client TLS configuration template is available")
+				}
+				proxyTLSConfig := proxyTLSConfigTemplate.Clone()
 				host, _, err := net.SplitHostPort(cm.ProxyURL.Host)
 				if err == nil {
 					proxyTLSConfig.ServerName = host

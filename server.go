@@ -294,7 +294,7 @@ func (proxyCtx *OurProxyCtx) DoRequest(req *http.Request, respW http.ResponseWri
 
 	if isWebSocketReq(req) {
 		proxyCtx.Logger.Debugf("Handling WebSocket Handshake: %v", req.URL)
-		cm, err := proxyCtx.Tr.ConnectMethodForRequest(&httpx.TransportRequest{req, nil})
+		cm, err := proxyCtx.Tr.ConnectMethodForRequest(&httpx.TransportRequest{Request: req, Extra: nil})
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to create a ConnectMethod struct")
 		}
@@ -580,8 +580,7 @@ func (proxy *OurProxyHttpServer) doDialTLS(addr HostPortPair, tlsConfigTemplate 
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to connect to %v", addr)
 	}
-	tlsConfig := new(tls.Config)
-	*tlsConfig = *tlsConfigTemplate
+	tlsConfig := tlsConfigTemplate.Clone()
 	tlsConfig.ServerName = addr.Host
 	return tls.Client(conn, tlsConfig), nil
 }

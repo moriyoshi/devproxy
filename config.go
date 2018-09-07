@@ -70,8 +70,8 @@ type PerHostConfig struct {
 }
 
 type MITMConfig struct {
-	ServerTLSConfigTemplate   tls.Config
-	ClientTLSConfigTemplate   tls.Config
+	ServerTLSConfigTemplate   *tls.Config
+	ClientTLSConfigTemplate   *tls.Config
 	SigningCertificateKeyPair struct {
 		Certificate *x509.Certificate
 		PrivateKey  crypto.PrivateKey
@@ -85,7 +85,7 @@ type ProxyConfig struct {
 	HTTPSProxy    *url.URL
 	IncludedHosts []HostPortPair
 	ExcludedHosts []HostPortPair
-	TLSConfig     tls.Config
+	TLSConfig     *tls.Config
 }
 
 type Config struct {
@@ -348,6 +348,8 @@ func (ctx *ConfigReaderContext) extractProxyConfig(configMap map[string]interfac
 			if err != nil {
 				return
 			}
+		} else {
+			retval.TLSConfig = new(tls.Config)
 		}
 	}
 	envUsed := false
@@ -689,7 +691,8 @@ func (ctx *ConfigReaderContext) extractCertPrivateKeyPairs(certConfigMap map[int
 	return
 }
 
-func (ctx *ConfigReaderContext) extractTLSConfig(tlsConfigMap map[interface{}]interface{}, path string, client bool) (retval tls.Config, err error) {
+func (ctx *ConfigReaderContext) extractTLSConfig(tlsConfigMap map[interface{}]interface{}, path string, client bool) (retval *tls.Config, err error) {
+	retval = new(tls.Config)
 	_cipherSuites, ok := tlsConfigMap["ciphers"]
 	if ok {
 		cipherSuites, ok := _cipherSuites.([]interface{})
@@ -848,6 +851,8 @@ func (ctx *ConfigReaderContext) extractMITMConfig(configMap map[string]interface
 			if err != nil {
 				return
 			}
+		} else {
+			retval.ClientTLSConfigTemplate = new(tls.Config)
 		}
 		__server, ok := _tls["server"]
 		if ok {
@@ -860,6 +865,8 @@ func (ctx *ConfigReaderContext) extractMITMConfig(configMap map[string]interface
 			if err != nil {
 				return
 			}
+		} else {
+			retval.ServerTLSConfigTemplate = new(tls.Config)
 		}
 		__ca, ok := _tls["ca"]
 		if !ok {

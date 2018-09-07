@@ -142,13 +142,13 @@ func (ctx *DevProxy) getProxyUrlForRequest(req *http.Request) (*url.URL, *tls.Co
 	}
 	if req.URL.Scheme == "https" {
 		if ctx.Config.Proxy.HTTPSProxy != nil {
-			return ctx.Config.Proxy.HTTPSProxy, &ctx.Config.Proxy.TLSConfig, nil
+			return ctx.Config.Proxy.HTTPSProxy, ctx.Config.Proxy.TLSConfig, nil
 		}
 	}
 	// falls back to http
 	if req.URL.Scheme == "https" || req.URL.Scheme == "http" {
 		if ctx.Config.Proxy.HTTPProxy != nil {
-			return ctx.Config.Proxy.HTTPProxy, &ctx.Config.Proxy.TLSConfig, nil
+			return ctx.Config.Proxy.HTTPProxy, ctx.Config.Proxy.TLSConfig, nil
 		}
 	}
 	return nil, nil, nil
@@ -160,14 +160,17 @@ func (ctx *DevProxy) newTLSConfigFactory() TLSConfigFactory {
 	}
 	return func(hostPortPairStr string, proxyCtx *OurProxyCtx) (*tls.Config, error) {
 		pair := splitHostPort(hostPortPairStr)
-		config := ctx.Config.MITM.ServerTLSConfigTemplate
+		if ctx.Config.MITM.ServerTLSConfigTemplate == nil {
+			return nil, errors.Errorf("no TLS configuration template is available")
+		}
+		config := ctx.Config.MITM.ServerTLSConfigTemplate.Clone()
 		ctx.Logger.Infof("Obtaining temporary certificate for %s", pair.Host)
 		cert, err := ctx.prepareMITMCertificate([]string{pair.Host})
 		if err != nil {
 			return nil, errors.Wrapf(err, "cannot sign host certificate with provided CA")
 		}
 		config.Certificates = append(config.Certificates, *cert)
-		return &config, nil
+		return config, nil
 	}
 }
 
@@ -179,7 +182,7 @@ func (ctx *DevProxy) newProxyURLBuilder() func(*http.Request) (*url.URL, *tls.Co
 
 func (ctx *DevProxy) newHttpTransport() *httpx.Transport {
 	transport := &httpx.Transport{
-		TLSClientConfig: &ctx.Config.MITM.ClientTLSConfigTemplate,
+		TLSClientConfig: ctx.Config.MITM.ClientTLSConfigTemplate,
 		Proxy2:          ctx.newProxyURLBuilder(),
 	}
 	transport.RegisterProtocol("fastcgi", &fastCGIRoundTripper{Logger: ctx.Logger})

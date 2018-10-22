@@ -363,6 +363,7 @@ func (proxyCtx *OurProxyCtx) DoRequest(req *http.Request, respW http.ResponseWri
 }
 
 func (proxyCtx *OurProxyCtx) HandleConnect(r *http.Request, proxyClient net.Conn) {
+	defer proxyClient.Close()
 	var targetHostPort string
 	{
 		pair := splitHostPort(r.URL.Host)

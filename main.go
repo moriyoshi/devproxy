@@ -95,12 +95,14 @@ func (ctx *DevProxy) bidiTunnel(connA net.Conn, connB net.Conn) {
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ctx.unidiTunnel(connA, connB)
 		connA.SetDeadline(time.Unix(0, 0))
 		connB.SetDeadline(time.Unix(0, 0))
 	}()
 	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ctx.unidiTunnel(connB, connA)
 		connA.SetDeadline(time.Unix(0, 0))
 		connB.SetDeadline(time.Unix(0, 0))

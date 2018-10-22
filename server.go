@@ -35,8 +35,8 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -90,53 +90,9 @@ func makeHttp10Response(header string, body string) string {
 	return header + "\r\n" + fmt.Sprintf("Content-Length: %d\r\n", len(body)) + "Connection: close\r\n\r\n" + body
 }
 
-/* --- BEGIN pasted from src/net/http/header.go -- */
-
-func isTokenBoundary(b byte) bool {
-	return b == ' ' || b == ',' || b == '\t'
-}
-
-// hasToken reports whether token appears with v, ASCII
-// case-insensitive, with space or comma boundaries.
-// token must be all lowercase.
-// v may contain mixed cased.
-func hasToken(v, token string) bool {
-	if len(token) > len(v) || token == "" {
-		return false
-	}
-	if v == token {
-		return true
-	}
-	for sp := 0; sp <= len(v)-len(token); sp++ {
-		// Check that first character is good.
-		// The token is ASCII, so checking only a single byte
-		// is sufficient. We skip this potential starting
-		// position if both the first byte and its potential
-		// ASCII uppercase equivalent (b|0x20) don't match.
-		// False positives ('^' => '~') are caught by EqualFold.
-		if b := v[sp]; b != token[0] && b|0x20 != token[0] {
-			continue
-		}
-		// Check that start pos is on a valid token boundary.
-		if sp > 0 && !isTokenBoundary(v[sp-1]) {
-			continue
-		}
-		// Check that end pos is on a valid token boundary.
-		if endPos := sp + len(token); endPos != len(v) && !isTokenBoundary(v[endPos]) {
-			continue
-		}
-		if strings.EqualFold(v[sp:sp+len(token)], token) {
-			return true
-		}
-	}
-	return false
-}
-
-/* --- END pasted from src/net/http/client.go -- */
-
 func isWebSocketReq(req *http.Request) bool {
 	connHdr := req.Header.Get("Connection")
-	if hasToken(connHdr, "upgrade") {
+	if httpx.HasToken(connHdr, "upgrade") {
 		upgradeHdr := req.Header.Get("Upgrade")
 		if strings.ToLower(upgradeHdr) == "websocket" {
 			return true
@@ -293,12 +249,12 @@ func (proxyCtx *OurProxyCtx) DoRequest(req *http.Request, respW http.ResponseWri
 	}()
 
 	if isWebSocketReq(req) {
-		proxyCtx.Logger.Debugf("Handling WebSocket Handshake: %v", req.URL)
+		proxyCtx.Logger.Debugf("handling WebSocket handshake: %v", req.URL)
 		cm, err := proxyCtx.Tr.ConnectMethodForRequest(&httpx.TransportRequest{Request: req, Extra: nil})
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to create a ConnectMethod struct")
 		}
-		obConn, _, err := proxyCtx.Tr.DoDial(cm)
+		obConn, _, _, _, err := proxyCtx.Tr.DoDial(req.Context(), cm)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to dial to remote server")
 		}
@@ -328,9 +284,9 @@ func (proxyCtx *OurProxyCtx) DoRequest(req *http.Request, respW http.ResponseWri
 			obConn.Close()
 			return nil, errors.Errorf("client sent data before handshake is complete")
 		}
-		proxyCtx.Logger.Debugf("Established bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
+		proxyCtx.Logger.Debugf("established bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
 		proxyCtx.Proxy.Ctx.bidiTunnel(obConn, ibConn)
-		proxyCtx.Logger.Debugf("Discarded bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
+		proxyCtx.Logger.Debugf("discarded bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
 		return nil, nil
 	} else {
 		timer := (*time.Timer)(nil)
@@ -339,7 +295,7 @@ func (proxyCtx *OurProxyCtx) DoRequest(req *http.Request, respW http.ResponseWri
 		if timeout > 0 {
 			timer = time.AfterFunc(timeout, func() {
 				atomic.StoreInt32(&canceled, 1)
-				proxyCtx.Tr.CancelRequest(req)
+				proxyCtx.Tr.CancelRequest(req, fmt.Errorf("timeout exceeded"))
 			})
 		}
 
@@ -434,22 +390,24 @@ func (proxyCtx *OurProxyCtx) HandleConnect(r *http.Request, proxyClient net.Conn
 					return
 				}
 			}
-			nestedProxyCtx.OrigResp = resp
-			resp = nestedProxyCtx.FilterResponse(resp)
-			resp.ContentLength = -1
-			if resp.Header != nil {
-				resp.Header.Del("Content-Length")
-			}
-			err = resp.Write(clientTlsConn)
-			if err != nil {
-				nestedProxyCtx.Logger.Errorf("failed to send response to the client (%s)", err.Error())
+			if resp != nil {
+				nestedProxyCtx.OrigResp = resp
+				resp = nestedProxyCtx.FilterResponse(resp)
+				resp.ContentLength = -1
+				if resp.Header != nil {
+					resp.Header.Del("Content-Length")
+				}
+				err = resp.Write(clientTlsConn)
+				if err != nil {
+					nestedProxyCtx.Logger.Errorf("failed to send response to the client (%s)", err.Error())
+				}
 			}
 			return
 		}
 	}
 
 	proxyCtx.Logger.Debugf("Connecting to %s", targetHostPort)
-	targetConn, err := proxyCtx.Proxy.ConnectDial(targetHostPort)
+	targetConn, err := proxyCtx.Proxy.ConnectDial(r.Context(), targetHostPort)
 	if err != nil {
 		proxyCtx.Logger.Errorf("failed to connect to %s (%s)", targetHostPort, err.Error())
 		if _, err := proxyClient.Write(http10BadGatewayBytes); err != nil {
@@ -506,6 +464,7 @@ func (proxy *OurProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		if err != nil {
 			proxy.Logger.Errorf("Failed to hijack the connection (%s)", err.Error())
 			http.Error(w, "CONNECT not supported", 400)
+			return
 		}
 		proxyCtx.HandleConnect(r, proxyClient)
 	} else {
@@ -563,17 +522,17 @@ func buildFakeHTTPSRequestFromHostPortPair(addr string) *http.Request {
 	}
 }
 
-func (proxy *OurProxyHttpServer) doDial(addr string) (net.Conn, error) {
-	if proxy.Tr.Dial != nil {
-		return proxy.Tr.Dial("tcp", addr)
+func (proxy *OurProxyHttpServer) doDial(ctx context.Context, addr string) (net.Conn, error) {
+	if proxy.Tr.DialContext != nil {
+		return proxy.Tr.DialContext(ctx, "tcp", addr)
 	}
-	return net.Dial("tcp", addr)
+	return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 }
 
-func (proxy *OurProxyHttpServer) doDialTLS(addr HostPortPair, tlsConfigTemplate *tls.Config) (net.Conn, error) {
+func (proxy *OurProxyHttpServer) doDialTLS(ctx context.Context, addr HostPortPair, tlsConfigTemplate *tls.Config) (net.Conn, error) {
 	if tlsConfigTemplate == nil {
 		if proxy.Tr.DialTLS != nil {
-			return proxy.Tr.DialTLS("tcp", addr.String())
+			return proxy.Tr.DialTLS(ctx, "tcp", addr.String())
 		}
 		tlsConfigTemplate = proxy.Tr.TLSClientConfig
 	}
@@ -586,80 +545,17 @@ func (proxy *OurProxyHttpServer) doDialTLS(addr HostPortPair, tlsConfigTemplate 
 	return tls.Client(conn, tlsConfig), nil
 }
 
-func buildProxyRequestFromProxyURL(proxyUrl *url.URL, addr string) *http.Request {
-	retval := &http.Request{
-		Method: "CONNECT",
-		URL:    &url.URL{Opaque: addr},
-		Host:   addr,
-		Header: http.Header{},
-	}
-	if proxyUrl.User != nil {
-		retval.Header.Set(
-			"Proxy-Authorization",
-			fmt.Sprintf(
-				"Basic %s",
-				base64.StdEncoding.EncodeToString([]byte(proxyUrl.User.String())), // UTF-8
-			),
-		)
-	}
-	return retval
-}
-
-func (proxy *OurProxyHttpServer) ConnectDial(addr string) (net.Conn, error) {
-	proxyUrl, proxyTlsConfig, err := proxy.Tr.Proxy2(buildFakeHTTPSRequestFromHostPortPair(addr))
+func (proxy *OurProxyHttpServer) ConnectDial(netCtx context.Context, addr string) (net.Conn, error) {
+	cm, err := proxy.Tr.ConnectMethodForRequest(&httpx.TransportRequest{Request: buildFakeHTTPSRequestFromHostPortPair(addr), Extra: nil})
+	cm.TargetScheme = "http" // we won't SSL-terminate the connection; packets will be passed through
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to connect to %s", addr)
 	}
-	if proxyUrl != nil {
-		proxyHostPortPair, err := toHostPortPair(proxyUrl)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to parse %v as a proxy URL", proxyUrl)
-		}
-		proxyRequest := buildProxyRequestFromProxyURL(proxyUrl, addr)
-		var conn net.Conn
-		if proxyUrl.Scheme == "https" {
-			conn, err = proxy.doDialTLS(proxyHostPortPair, proxyTlsConfig)
-			if err != nil {
-				return nil, errors.Wrapf(err, "failed to establish TLS connection to %v", proxyUrl)
-			}
-		} else {
-			conn, err = proxy.doDial(proxyHostPortPair.String())
-			if err != nil {
-				return nil, errors.Wrapf(err, "failed to connect to %v", proxyHostPortPair)
-			}
-		}
-		somethingWentWrong := true // always be prepared to something bad
-		defer func() {
-			if somethingWentWrong {
-				conn.Close()
-			}
-		}()
-		proxyRequest.Write(conn)
-		br := bufio.NewReader(conn)
-		resp, err := http.ReadResponse(br, proxyRequest)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to read response")
-		}
-		if resp.StatusCode != 200 {
-			return nil, errors.Errorf("proxy server %s returned error status (%d) for tunneling request to %s", proxyUrl.String(), resp.StatusCode, addr)
-		}
-		somethingWentWrong = false // we are safe
-		return conn, nil
-	} else {
-		return proxy.doDial(addr)
+	conn, _, _, _, err := proxy.Tr.DoDial(netCtx, cm)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to connect to %s", addr)
 	}
-}
-
-func CloneHeader(orig http.Header) http.Header {
-	newHeader := make(http.Header)
-	for headerName, headerValues := range orig {
-		header := make([]string, len(headerValues))
-		for i, headerValue := range headerValues {
-			header[i] = headerValue
-		}
-		newHeader[headerName] = header
-	}
-	return newHeader
+	return conn, err
 }
 
 func CloneRequest(r *http.Request) *http.Request {
@@ -668,10 +564,10 @@ func CloneRequest(r *http.Request) *http.Request {
 	newRequest.URL = new(url.URL)
 	*newRequest.URL = *r.URL
 	if r.Header != nil {
-		newRequest.Header = CloneHeader(r.Header)
+		newRequest.Header = httpx.CloneHeader(r.Header)
 	}
 	if r.Trailer != nil {
-		newRequest.Trailer = CloneHeader(r.Trailer)
+		newRequest.Trailer = httpx.CloneHeader(r.Trailer)
 	}
 	return newRequest
 }

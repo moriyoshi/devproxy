@@ -249,7 +249,7 @@ func (proxyCtx *OurProxyCtx) DoRequest(req *http.Request, respW http.ResponseWri
 	}()
 
 	if isWebSocketReq(req) {
-		proxyCtx.Logger.Debugf("Handling WebSocket Handshake: %v", req.URL)
+		proxyCtx.Logger.Debugf("handling WebSocket handshake: %v", req.URL)
 		cm, err := proxyCtx.Tr.ConnectMethodForRequest(&httpx.TransportRequest{Request: req, Extra: nil})
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to create a ConnectMethod struct")
@@ -284,9 +284,9 @@ func (proxyCtx *OurProxyCtx) DoRequest(req *http.Request, respW http.ResponseWri
 			obConn.Close()
 			return nil, errors.Errorf("client sent data before handshake is complete")
 		}
-		proxyCtx.Logger.Debugf("Established bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
+		proxyCtx.Logger.Debugf("established bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
 		proxyCtx.Proxy.Ctx.bidiTunnel(obConn, ibConn)
-		proxyCtx.Logger.Debugf("Discarded bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
+		proxyCtx.Logger.Debugf("discarded bidi tunnel between %v and %v", obConn.RemoteAddr(), ibConn.RemoteAddr())
 		return nil, nil
 	} else {
 		timer := (*time.Timer)(nil)

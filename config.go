@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/cloudfoundry-incubator/candiedyaml"
+	"github.com/moriyoshi/mimetypes"
 	"github.com/pkg/errors"
 )
 
@@ -88,11 +89,17 @@ type ProxyConfig struct {
 	TLSConfig     *tls.Config
 }
 
+type FileTransportConfig struct {
+	RootDirectory string
+	MimeTypes     mimetypes.MediaTypeRegistry
+}
+
 type Config struct {
 	Hosts           map[string]*PerHostConfig
 	Proxy           ProxyConfig
 	MITM            MITMConfig
 	ResponseFilters []ResponseFilter
+	FileTransport   FileTransportConfig
 	NowGetter       func() (time.Time, error)
 }
 
@@ -955,6 +962,69 @@ func (ctx *ConfigReaderContext) extractResponseFilters(configMap map[string]inte
 	return
 }
 
+func (ctx *ConfigReaderContext) extractFileTransportConfig(configMap map[string]interface{}) (retval FileTransportConfig, err error) {
+	__fileTx, ok := configMap["file_tx"]
+	if !ok {
+		return
+	}
+
+	_fileTx, ok := __fileTx.(map[interface{}]interface{})
+	if !ok {
+		err = errors.Errorf("%s: invalid structure under file_tx", ctx.Filename)
+		return
+	}
+
+	{
+		root := "."
+		_root, ok := _fileTx["root"]
+		if ok {
+			root, ok = _root.(string)
+			if !ok {
+				err = errors.Errorf("%s: invalid value for file_tx/root", ctx.Filename)
+				return
+			}
+		}
+
+		if !filepath.IsAbs(root) {
+			var wd string
+			wd, err = os.Getwd()
+			if err != nil {
+				return
+			}
+			root = filepath.Clean(filepath.Join(wd, root))
+		}
+
+		retval.RootDirectory = root
+	}
+
+	{
+		_mimeTypeFile, ok := _fileTx["mime_type_file"]
+		if ok {
+			mimeTypeFile, ok := _mimeTypeFile.(string)
+			if !ok {
+				err = errors.Errorf("%s: invalid value for file_tx/mime_type_file", ctx.Filename)
+				return
+			}
+			mimeTypeFileFormat := "apache"
+			_mimeTypeFileFormat, ok := _fileTx["mime_type_file_format"]
+			if ok {
+				mimeTypeFileFormat, ok = _mimeTypeFileFormat.(string)
+				if !ok {
+					err = errors.Errorf("%s: invalid value for file_tx/mime_type_file_format", ctx.Filename)
+					return
+				}
+			}
+			retval.MimeTypes, err = mimetypes.Load(mimeTypeFile, mimeTypeFileFormat)
+			if err != nil {
+				err = errors.Wrapf(err, "failed to load %s", mimeTypeFile)
+				return
+			}
+		}
+	}
+
+	return
+}
+
 func defaultNow() (time.Time, error) {
 	return time.Now(), nil
 }
@@ -991,11 +1061,18 @@ func loadConfig(yamlFile string, progname string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	fileTransport, err := ctx.extractFileTransportConfig(configMap)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		Hosts:           perHostConfigs,
 		Proxy:           proxy,
 		MITM:            mitm,
 		ResponseFilters: responseFilters,
+		FileTransport:   fileTransport,
 		NowGetter:       defaultNow,
 	}, nil
 }

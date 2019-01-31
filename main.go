@@ -188,6 +188,7 @@ func (ctx *DevProxy) newHttpTransport() *httpx.Transport {
 		Proxy2:          ctx.newProxyURLBuilder(),
 	}
 	transport.RegisterProtocol("fastcgi", &fastCGIRoundTripper{Logger: ctx.Logger})
+	transport.RegisterProtocol("file", NewFileTransport(ctx.Config.FileTransport))
 	return transport
 }
 
@@ -242,10 +243,10 @@ func (ctx *DevProxy) prepareMITMCertificate(hosts []string) (*tls.Certificate, e
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDataEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		IsCA:           false,
-		MaxPathLen:     0,
-		MaxPathLenZero: true,
-		DNSNames:       hosts,
+		IsCA:                  false,
+		MaxPathLen:            0,
+		MaxPathLenZero:        true,
+		DNSNames:              hosts,
 	}
 	derBytes, err := x509.CreateCertificate(ctx.CryptoRandReader, &template, ca.Certificate, ca.Certificate.PublicKey, ca.PrivateKey)
 	if err != nil {

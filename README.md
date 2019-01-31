@@ -18,7 +18,7 @@ It has the following features:
 
   This can be done since the name resolution is done in devproxy, which is configured to map any request for http://example.com to http://127.0.0.1:3000.
 
-* Transparent TLS wrapping (simulation of an SSL/TLS-enabled environment)
+* Transparent TLS termination / wrapping (simulation of an SSL/TLS-enabled environment)
 
   You can also make it possible to direct the request to `https://example.com/` to the upstream by adding the configuration like the following:
 
@@ -69,6 +69,42 @@ It has the following features:
           X-Cgi-Script-Name: $2
           X-Cgi-Path-Info: $3
   ```
+
+* Serving files on the filesystem
+  
+  You can also serve the local files by specifying `file:` scheme as an upstream:
+
+  ```
+  hosts:
+    http://example.com:
+      - ^(/.*)$: file:///some-document-root$1
+  ```
+
+  *WARNING*: this feature did such naive path translation that is easily exploitable for path traversals beyond the document root.  Never expose the server to public when it is used.
+
+  ```
+  file_tx:
+    root: /var/empty
+    mime_type_file: /usr/share/mime/globs
+    mime_type_file_format: xdg-globs
+  ```
+
+  Toplevel `file_tx` section configures the file transport.
+
+  * `root` (string, optional)
+
+    Specifies the base directory for resolving a absolute path when a relative form of file URI yields from the match.
+
+  * `mime_type_file` (string, optional)
+
+    Specifies the path to the MIME-type-to-extension mapping file used to deduce a MIME type from the file's extension.
+    
+    devproxy will use Go's standard `mime.TypeForExtension()` function when unspecified.
+
+  * `mime_type_file_format` (string, optional)
+
+    Specifies the format for the MIME type file.  Accepted values are `apache` and `xdg-globs`.
+   
 
 * Proxy chaining
 

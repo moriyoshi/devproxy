@@ -35,6 +35,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -59,7 +60,7 @@ type MyReaderWithStat struct {
 	opener *MyOpener
 }
 
-func (opener *MyOpener) Open(name string) (simplefiletx.ReaderWithStat, error) {
+func (opener *MyOpener) Open(name string) (io.ReadCloser, error) {
 	f, err := os.Open(name)
 	if err != nil {
 		return nil, err

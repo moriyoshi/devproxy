@@ -77,6 +77,7 @@ It has the following features:
   ```
   hosts:
     http://example.com:
+      - ^(/.*)?/$: file:///some-document-root$1/index.html
       - ^(/.*)$: file:///some-document-root$1
   ```
 

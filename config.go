@@ -52,7 +52,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudfoundry-incubator/candiedyaml"
+	"github.com/go-yaml/yaml"
 	"github.com/moriyoshi/mimetypes"
 	"github.com/pkg/errors"
 )
@@ -1035,7 +1035,7 @@ func loadConfig(yamlFile string, progname string) (*Config, error) {
 		return nil, errors.Wrapf(err, "failed to load %s", yamlFile)
 	}
 	configMap := make(map[string]interface{})
-	err = candiedyaml.NewDecoder(f).Decode(&configMap)
+	err = yaml.NewDecoder(f).Decode(&configMap)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to load %s", yamlFile)
 	}

@@ -1,7 +1,7 @@
 module github.com/moriyoshi/devproxy
 
 require (
-	github.com/cloudfoundry-incubator/candiedyaml v0.0.0-20170901234223-a41693b7b7af
+	github.com/go-yaml/yaml v2.1.0+incompatible
 	github.com/moriyoshi/mimetypes v1.0.0
 	github.com/moriyoshi/simplefiletx v1.0.0
 	github.com/pkg/errors v0.8.1

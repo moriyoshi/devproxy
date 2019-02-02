@@ -34,8 +34,8 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"github.com/Sirupsen/logrus"
 	"github.com/moriyoshi/devproxy/fcgiclient"
+	"github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"math"

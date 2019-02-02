@@ -47,9 +47,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/moriyoshi/devproxy/httpx"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 type ResponseFilter interface {

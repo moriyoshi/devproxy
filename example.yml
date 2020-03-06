@@ -38,3 +38,7 @@ hosts:
         X-Cgi-Script-Filename: /document_root$2
         X-Cgi-Script-Name: $2
         X-Cgi-Path-Info: $3
+  http://redirect.example.com:
+    - ^/no-scheme$: x-http-redirect://example.com/?a=2%20#23424
+    - ^/with-scheme$: x-http-redirect:https://example.com/?a=2%20#23424
+    - ^/with-scheme-and-status-code$: x-http-redirect:302:https://example.com/?a=2%20#23424

@@ -6,7 +6,6 @@ github.com/moriyoshi/mimetypes v1.0.0 h1:nESQmdWurua/+7QzWnxMpbHYUd0mMsi6zKAkq3Z
 github.com/moriyoshi/mimetypes v1.0.0/go.mod h1:BhYJSMKygU9xeSsBmDuWn+ger4JXdBwCzDazbMBPt/0=
 github.com/moriyoshi/simplefiletx v1.0.0 h1:pgibEbJTapZ0BXKB0Xr/3HttANFvTx/CSlKVyHKJpkQ=
 github.com/moriyoshi/simplefiletx v1.0.0/go.mod h1:HR8wOdlEVGQNjKZdpuATLQi2pxMHKljiUov0F157BD4=
-github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

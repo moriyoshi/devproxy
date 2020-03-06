@@ -1,3 +1,5 @@
+// go:generate gen_tls $GOFILE
+
 /*
  * Copyright (c) 2016 Moriyoshi Koizumi
  * Copyright (c) 2012 Elazar Leibovich.
@@ -80,4 +82,10 @@ var cipherSuiteValues = map[string]uint16{
 	"ECDHE_RSA_WITH_CHACHA20_POLY1305":        tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
 	"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305":  tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
 	"ECDHE_ECDSA_WITH_CHACHA20_POLY1305":      tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+	"TLS_AES_128_GCM_SHA256":                  tls.TLS_AES_128_GCM_SHA256,
+	"AES_128_GCM_SHA256":                      tls.TLS_AES_128_GCM_SHA256,
+	"TLS_AES_256_GCM_SHA384":                  tls.TLS_AES_256_GCM_SHA384,
+	"AES_256_GCM_SHA384":                      tls.TLS_AES_256_GCM_SHA384,
+	"TLS_CHACHA20_POLY1305_SHA256":            tls.TLS_CHACHA20_POLY1305_SHA256,
+	"CHACHA20_POLY1305_SHA256":                tls.TLS_CHACHA20_POLY1305_SHA256,
 }

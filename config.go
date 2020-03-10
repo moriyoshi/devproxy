@@ -427,6 +427,7 @@ func (ctx *ConfigReaderContext) extractCertPool(certPoolConfig interface{}, path
 						if err != nil {
 							return errors.Wrapf(err, "%s: failed to open %s", ctx.Filename, cp)
 						}
+						defer cf.Close()
 						err = traverse(cf)
 						if err != nil {
 							return err

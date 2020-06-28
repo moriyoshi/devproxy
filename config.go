@@ -408,6 +408,8 @@ func (ctx *ConfigReaderContext) extractCertPool(certPoolConfig interface{}, path
 			return nil, errors.Errorf("%s: failed to open %s", ctx.Filename, fileOrDirectory)
 		}
 		if err == nil {
+			defer f.Close()
+
 			var traverse func(f *os.File) error
 			traverse = func(f *os.File) error {
 				st, err := f.Stat()
@@ -425,6 +427,7 @@ func (ctx *ConfigReaderContext) extractCertPool(certPoolConfig interface{}, path
 						if err != nil {
 							return errors.Wrapf(err, "%s: failed to open %s", ctx.Filename, cp)
 						}
+						defer cf.Close()
 						err = traverse(cf)
 						if err != nil {
 							return err
@@ -576,6 +579,8 @@ func (ctx *ConfigReaderContext) extractCertPrivateKeyPairs(certConfigMap map[int
 			return
 		}
 		if err == nil {
+			defer f.Close()
+
 			var pemBytes []byte
 			pemBytes, err = ioutil.ReadAll(f)
 			if err != nil {
@@ -645,6 +650,8 @@ func (ctx *ConfigReaderContext) extractCertPrivateKeyPairs(certConfigMap map[int
 				return
 			}
 			if err == nil {
+				defer f.Close()
+
 				var pemBytes []byte
 				pemBytes, err = ioutil.ReadAll(f)
 				if err != nil {
@@ -1034,6 +1041,8 @@ func loadConfig(yamlFile string, progname string) (*Config, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to load %s", yamlFile)
 	}
+	defer f.Close()
+
 	configMap := make(map[string]interface{})
 	err = yaml.NewDecoder(f).Decode(&configMap)
 	if err != nil {

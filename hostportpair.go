@@ -99,3 +99,7 @@ func (pair HostPortPair) String() string {
 		return pair.Host
 	}
 }
+
+func (pair HostPortPair) Matches(another HostPortPair) bool {
+	return (pair.Host == "" || pair.Host == another.Host) && (pair.Port == "" || pair.Port == another.Port)
+}

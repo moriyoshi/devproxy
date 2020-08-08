@@ -52,9 +52,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-yaml/yaml"
 	"github.com/moriyoshi/mimetypes"
 	"github.com/pkg/errors"
+	"gopkg.in/yaml.v2"
 )
 
 type ResponseFilterFactory func(*ConfigReaderContext, map[interface{}]interface{}) (ResponseFilter, error)
@@ -125,104 +125,84 @@ var tlsVersionValues = map[string]uint16{
 	"TLS1.1": tls.VersionTLS11,
 	"TLS12":  tls.VersionTLS12,
 	"TLS1.2": tls.VersionTLS12,
+	"TLS13":  tls.VersionTLS13,
+	"TLS1.3": tls.VersionTLS13,
 }
 
 type ConfigReaderContext struct {
-	Filename string
-	Warn     func(string)
+	filename string
+	warn     func(string)
 }
 
-func (ctx *ConfigReaderContext) extractPerHostConfigs(configMap map[string]interface{}) (map[string]*PerHostConfig, error) {
-	__hosts, ok := configMap["hosts"]
-	if !ok {
-		return make(map[string]*PerHostConfig), nil
-	}
-	_hosts, ok := __hosts.(map[interface{}]interface{})
-	if !ok {
-		return nil, errors.Errorf("%s: invalid structure under hosts", ctx.Filename)
-	}
-	perHostConfigs := make(map[string]*PerHostConfig)
-	for __url, __patterns := range _hosts {
-		_url, ok := __url.(string)
-		if !ok {
-			return nil, errors.Errorf("%s: invalid structure under hosts", ctx.Filename)
-		}
-		url, err := url.Parse(_url)
-		if err != nil {
-			return nil, errors.Wrapf(err, "%s: invalid value for URL (%s) under hosts", ctx.Filename, _url)
-		}
-		if url.Path != "" {
-			return nil, errors.Errorf("%s: path may not be present: %s", ctx.Filename, _url)
-		}
-		_patterns, ok := __patterns.([]interface{})
-		if !ok {
-			return nil, errors.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
-		}
-		patterns := make([]Pattern, 0)
-		for _, ___pattern := range _patterns {
-			__pattern, ok := ___pattern.(map[interface{}]interface{})
-			if !ok {
-				return nil, errors.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
+func (ctx *ConfigReaderContext) extractPerHostConfigs(deref dereference) (perHostConfigs map[string]*PerHostConfig, err error) {
+	perHostConfigs = make(map[string]*PerHostConfig)
+	err = deref.multi(
+		"hosts", func(urlStr string, hostMap dereference) error {
+			url, err := url.Parse(urlStr)
+			if err != nil {
+				return errors.Wrapf(err, "invalid value for URL (%s) under %s", urlStr)
 			}
-			headers := make(http.Header)
-			patternOccurred := false
-			for _pattern, _substitution := range __pattern {
-				pattern, ok := _pattern.(string)
-				if !ok {
-					return nil, errors.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
-				}
-				if pattern == "headers" {
-					__headers, ok := _substitution.(map[interface{}]interface{})
-					if !ok {
-						return nil, errors.Errorf("%s: invalid structure under hosts/%s/%s", ctx.Filename, _url, pattern)
-					}
-					for _headerName, __values := range __headers {
-						headerName, ok := _headerName.(string)
-						if !ok {
-							return nil, errors.Errorf("%s: invalid structure under hosts/%s/%s", ctx.Filename, _url, pattern)
-						}
-						values := ([]string)(nil)
-						if __values != nil {
-							_values, ok := __values.([]interface{})
-							if ok {
-								values = make([]string, len(_values))
-								for i, _header := range _values {
+			if url.Path != "" {
+				return errors.Errorf("path may not be present: %s", urlStr)
+			}
+			patterns := make([]Pattern, 0)
+			err = hostMap.iterateHomogeneousValuedSlice(yamlMapType, func(_ int, kv dereference) error {
+				headers := make(http.Header)
+				patternOccurred := false
+				return kv.iterateHomogeneousValuedMap(emptyInterfaceType, func(pattern string, substitutionOrAuxAttrs dereference) error {
+					if pattern == "headers" {
+						err := substitutionOrAuxAttrs.iterateHomogeneousValuedMap(emptyInterfaceType, func(headerName string, values dereference) error {
+							if values.value == nil {
+								return errors.Errorf("element must be non-null")
+							}
+							var resultingValues []string
+							switch values := values.value.(type) {
+							case []interface{}:
+								resultingValues = make([]string, len(values))
+								for i, _header := range values {
 									header, ok := _header.(string)
 									if !ok {
-										return nil, errors.Errorf("%s: invalid structure under hosts/%s/%s/%s", ctx.Filename, _url, pattern, headerName)
+										return errors.Errorf("unexpected element; expecting a string, got %T", _header)
 									}
 									values[i] = header
 								}
-							} else {
-								value, ok := __values.(string)
-								if !ok {
-									return nil, errors.Errorf("%s: invalid structure under hosts/%s/%s/%s", ctx.Filename, _url, pattern, headerName)
-								}
-								values = []string{value}
+							case string:
+								resultingValues = []string{values}
+							default:
+								return errors.Errorf("expecting string or array of string, got %T", values)
 							}
+							headers[headerName] = resultingValues
+							return nil
+						})
+						if err != nil {
+							return err
 						}
-						headers[headerName] = values
+					} else {
+						if patternOccurred {
+							return errors.Errorf("Pattern already specfieid")
+						}
+						substitution, err := substitutionOrAuxAttrs.stringValue()
+						if err != nil {
+							return err
+						}
+						patternRegexp, err := regexp.Compile(pattern)
+						if err != nil {
+							return errors.Errorf("invalid regexp %s for %s configuration", pattern, urlStr)
+						}
+						patterns = append(patterns, Pattern{Pattern: patternRegexp, Substitution: substitution, Headers: headers})
+						patternOccurred = true
 					}
-				} else {
-					if patternOccurred {
-						return nil, errors.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
-					}
-					substitution, ok := _substitution.(string)
-					if !ok {
-						return nil, errors.Errorf("%s: invalid structure under hosts/%s", ctx.Filename, _url)
-					}
-					patternRegexp, err := regexp.Compile(pattern)
-					if err != nil {
-						return nil, errors.Errorf("%s: invalid regexp %s for %s configuration", ctx.Filename, pattern, _url)
-					}
-					patterns = append(patterns, Pattern{Pattern: patternRegexp, Substitution: substitution, Headers: headers})
-					patternOccurred = true
-				}
+					return nil
+				})
+			})
+			if err != nil {
+				return err
 			}
-		}
-		perHostConfigs[_url] = &PerHostConfig{Host: url, Patterns: patterns}
-	}
-	return perHostConfigs, nil
+			perHostConfigs[urlStr] = &PerHostConfig{Host: url, Patterns: patterns}
+			return nil
+		},
+	)
+	return
 }
 
 func getenv(name string) string {
@@ -270,95 +250,55 @@ func parseUrlOrHostPortPair(urlOrHostPortPair string) (retval *url.URL, err erro
 	return
 }
 
-func (ctx *ConfigReaderContext) extractProxyConfig(configMap map[string]interface{}) (retval ProxyConfig, err error) {
-	__proxy, ok := configMap["proxy"]
-	if ok {
-		_proxy, ok := __proxy.(map[interface{}]interface{})
-		if !ok {
-			err = errors.Errorf("%s: invalid structure under proxy", ctx.Filename)
-			return
-		}
-		_httpProxy, ok := _proxy["http"]
-		if ok {
-			httpProxy, ok := _httpProxy.(string)
-			if !ok {
-				err = errors.Errorf("%s: invalid value for proxy/http_proxy", ctx.Filename)
-				return
-			}
-			var httpProxyUrl *url.URL
-			httpProxyUrl, err = parseUrlOrHostPortPair(httpProxy)
-			if err != nil {
-				err = errors.Wrapf(err, "%s: invalid value for proxy/http_proxy", ctx.Filename)
-				return
-			}
-			retval.HTTPProxy = httpProxyUrl
-		}
-		_httpsProxy, ok := _proxy["https"]
-		if ok {
-			httpsProxy, ok := _httpsProxy.(string)
-			if !ok {
-				err = errors.Errorf("%s: invalid value for proxy/http_proxy", ctx.Filename)
-				return
-			}
-			var httpsProxyUrl *url.URL
-			httpsProxyUrl, err = parseUrlOrHostPortPair(httpsProxy)
-			if err != nil {
-				err = errors.Wrapf(err, "%s: invalid value for proxy/http_proxy", ctx.Filename)
-				return
-			}
-			retval.HTTPSProxy = httpsProxyUrl
-		}
-		__includedHosts, ok := _proxy["included"]
-		if ok {
-			_includedHosts, ok := __includedHosts.([]interface{})
-			if !ok {
-				err = errors.Errorf("%s: invalid value for proxy/included", ctx.Filename)
-				return
-			}
-			includedHosts, ok := convertToStringList(_includedHosts)
-			if !ok {
-				err = errors.Errorf("%s: invalid value for proxy/included", ctx.Filename)
-				return
-			}
-			retval.IncludedHosts, err = convertUnparsedHostsIntoPairs(includedHosts)
-			if err != nil {
-				err = errors.Wrapf(err, "invalid host-port pair contained in NO_PROXY")
-				return
-			}
-		}
-		__excludedHosts, ok := _proxy["excluded"]
-		if ok {
-			_excludedHosts, ok := __excludedHosts.([]interface{})
-			if !ok {
-				err = errors.Errorf("%s: invalid value for proxy/excluded", ctx.Filename)
-				return
-			}
-			excludedHosts, ok := convertToStringList(_excludedHosts)
-			if !ok {
-				err = errors.Errorf("%s: invalid value for proxy/excluded", ctx.Filename)
-				return
-			}
-			retval.ExcludedHosts, err = convertUnparsedHostsIntoPairs(excludedHosts)
-			if err != nil {
-				err = errors.Wrapf(err, "invalid host-port pair contained in NO_PROXY")
-				return
-			}
-		}
-		__tlsConfig, ok := _proxy["tls"]
-		if ok {
-			_tlsConfig, ok := __tlsConfig.(map[interface{}]interface{})
-			if !ok {
-				err = errors.Errorf("%s: invalid value for proxy/tls", ctx.Filename)
-				return
-			}
-			retval.TLSConfig, err = ctx.extractTLSConfig(_tlsConfig, "proxy/tls", true)
-			if err != nil {
-				return
-			}
-		} else {
-			retval.TLSConfig = new(tls.Config)
-		}
+func (ctx *ConfigReaderContext) extractProxyConfig(deref dereference) (retval ProxyConfig, err error) {
+	err = deref.multi(
+		"proxy", func(deref dereference) error {
+			return deref.multi(
+				"http", func(httpProxy string) error {
+					var httpProxyUrl *url.URL
+					httpProxyUrl, err = parseUrlOrHostPortPair(httpProxy)
+					if err != nil {
+						return errors.Wrapf(err, "invalid value for proxy/http_proxy")
+					}
+					retval.HTTPProxy = httpProxyUrl
+					return nil
+				},
+				"https", func(httpsProxy string) error {
+					var httpsProxyUrl *url.URL
+					httpsProxyUrl, err = parseUrlOrHostPortPair(httpsProxy)
+					if err != nil {
+						return errors.Wrapf(err, "invalid value for proxy/http_proxy")
+					}
+					retval.HTTPSProxy = httpsProxyUrl
+					return nil
+				},
+				"included", func(includedHosts []string) error {
+					retval.IncludedHosts, err = convertUnparsedHostsIntoPairs(includedHosts)
+					if err != nil {
+						return errors.Wrapf(err, "invalid host-port pair contained in NO_PROXY")
+					}
+					return nil
+				},
+				"excluded", func(excludedHosts []string) error {
+					retval.ExcludedHosts, err = convertUnparsedHostsIntoPairs(excludedHosts)
+					if err != nil {
+						return errors.Wrapf(err, "invalid host-port pair contained in NO_PROXY")
+					}
+					return nil
+				},
+				"tls", func(deref dereference) error {
+					var err error
+					retval.TLSConfig, err = ctx.extractTLSConfig(deref, true)
+					return err
+				},
+			)
+		},
+	)
+
+	if err != nil {
+		return
 	}
+
 	envUsed := false
 	if retval.HTTPProxy == nil {
 		httpProxy := getenv("http_proxy")
@@ -398,14 +338,14 @@ func (ctx *ConfigReaderContext) extractProxyConfig(configMap map[string]interfac
 	return
 }
 
-func (ctx *ConfigReaderContext) extractCertPool(certPoolConfig interface{}, path string) (*x509.CertPool, error) {
+func (ctx *ConfigReaderContext) extractCertPool(deref dereference) (*x509.CertPool, error) {
 	pool := x509.NewCertPool()
-	fileOrDirectory, ok := certPoolConfig.(string)
-	if ok {
+	switch fileDirectoryOrPemBundle := deref.value.(type) {
+	case string:
 		var f *os.File
-		f, err := os.Open(fileOrDirectory)
+		f, err := os.Open(fileDirectoryOrPemBundle)
 		if err != nil && !os.IsNotExist(err) {
-			return nil, errors.Errorf("%s: failed to open %s", ctx.Filename, fileOrDirectory)
+			return nil, errors.Errorf("failed to open %s", fileDirectoryOrPemBundle)
 		}
 		if err == nil {
 			defer f.Close()
@@ -414,18 +354,18 @@ func (ctx *ConfigReaderContext) extractCertPool(certPoolConfig interface{}, path
 			traverse = func(f *os.File) error {
 				st, err := f.Stat()
 				if err != nil {
-					return errors.Wrapf(err, "%s: failed to open %s", ctx.Filename, f.Name())
+					return errors.Wrapf(err, "failed to open %s", f.Name())
 				}
 				if st.IsDir() {
 					children, err := f.Readdir(-1)
 					if err != nil {
-						return errors.Wrapf(err, "%s: failed to read directory entry under %s", ctx.Filename, f.Name())
+						return errors.Wrapf(err, "failed to read directory entry under %s", f.Name())
 					}
 					for _, child := range children {
 						cp := filepath.Join(f.Name(), child.Name())
 						cf, err := os.Open(cp)
 						if err != nil {
-							return errors.Wrapf(err, "%s: failed to open %s", ctx.Filename, cp)
+							return errors.Wrapf(err, "failed to open %s", cp)
 						}
 						defer cf.Close()
 						err = traverse(cf)
@@ -436,10 +376,10 @@ func (ctx *ConfigReaderContext) extractCertPool(certPoolConfig interface{}, path
 				} else {
 					pems, err := ioutil.ReadAll(f)
 					if err != nil {
-						return errors.Wrapf(err, "%s: failed to read certificates from %s", ctx.Filename, f.Name())
+						return errors.Wrapf(err, "failed to read certificates from %s", f.Name())
 					}
 					if !pool.AppendCertsFromPEM(pems) {
-						ctx.Warn(fmt.Sprintf("failed to parse some certificates in %s", f.Name()))
+						ctx.warn(fmt.Sprintf("failed to parse some certificates in %s", f.Name()))
 					}
 				}
 				return nil
@@ -449,44 +389,44 @@ func (ctx *ConfigReaderContext) extractCertPool(certPoolConfig interface{}, path
 				return nil, err
 			}
 		} else {
-			if strings.HasPrefix(fileOrDirectory, "----- BEGIN") {
-				if !pool.AppendCertsFromPEM([]byte(fileOrDirectory)) {
-					ctx.Warn("failed to parse some certificates")
+			if strings.HasPrefix(fileDirectoryOrPemBundle, "----- BEGIN") {
+				if !pool.AppendCertsFromPEM([]byte(fileDirectoryOrPemBundle)) {
+					ctx.warn("failed to parse some certificates")
 				}
 			} else {
-				return nil, errors.Errorf("%s: %s does not exist", ctx.Filename, fileOrDirectory)
+				return nil, errors.Errorf("%s does not exist", fileDirectoryOrPemBundle)
 			}
 		}
 		return pool, nil
-	}
-	_certList, ok := certPoolConfig.([]interface{})
-	if ok {
-		for _, _certs := range _certList {
+	case []interface{}:
+		for _, _certs := range fileDirectoryOrPemBundle {
 			certs, ok := _certs.(string)
 			if !ok {
-				return nil, errors.Errorf("%s: every item under %s must be a string", ctx.Filename, path)
+				return nil, errors.Errorf("every item must be a string")
 			}
 			if !pool.AppendCertsFromPEM([]byte(certs)) {
-				ctx.Warn("failed to parse some certificates")
+				ctx.warn("failed to parse some certificates")
 			}
 		}
 		return pool, nil
-	}
-	_certMap, ok := certPoolConfig.(map[interface{}]interface{})
-	if ok {
-		for _name, _certs := range _certMap {
-			name := _name.(string)
+	case map[interface{}]interface{}:
+		for _name, _certs := range fileDirectoryOrPemBundle {
+			name, ok := _name.(string)
+			if !ok {
+				return nil, errors.Errorf("every key must be a string")
+			}
 			certs, ok := _certs.(string)
 			if !ok {
-				return nil, errors.Errorf("%s: value for %s/%s must be a string", ctx.Filename, path, name)
+				return nil, errors.Errorf("value for item %s must be a string", name)
 			}
 			if !pool.AppendCertsFromPEM([]byte(certs)) {
-				ctx.Warn("failed to parse some certificates")
+				ctx.warn("failed to parse some certificates")
 			}
 		}
 		return pool, nil
+	default:
+		return nil, errors.Errorf("expecting a string, mapping or array, got %T", fileDirectoryOrPemBundle)
 	}
-	return nil, errors.Errorf("%s: invalid structure under %s", ctx.Filename, path)
 }
 
 func countLines(s []byte) int {
@@ -561,143 +501,123 @@ func checkIfKeysArePaired(a crypto.PublicKey, b crypto.PrivateKey) bool {
 	return false
 }
 
-func (ctx *ConfigReaderContext) extractCertPrivateKeyPairs(certConfigMap map[interface{}]interface{}, path string) (tlsCert tls.Certificate, x509Cert *x509.Certificate, err error) {
-	certs := [][]byte(nil)
-	key := crypto.PrivateKey(nil)
+func (ctx *ConfigReaderContext) extractCertPrivateKeyPairs(deref dereference) (tlsCert tls.Certificate, x509Cert *x509.Certificate, err error) {
+	var certs [][]byte
+	var key crypto.PrivateKey
 
-	_filenamePemOrList, ok := certConfigMap["cert"]
-	if !ok {
-		err = errors.Errorf("%s: missing item \"cert\" under %s", ctx.Filename, path)
+	err = deref.multi(
+		required{"cert"}, func(filenamePemOrListDeref dereference) error {
+			switch filenamePemOrList := filenamePemOrListDeref.value.(type) {
+			case string:
+				f, fErr := os.Open(filenamePemOrList)
+				if fErr != nil {
+					if !os.IsNotExist(fErr) {
+						return errors.Wrapf(fErr, "could not open %s", filenamePemOrList)
+					}
+				}
+				if fErr == nil {
+					// file
+					defer f.Close()
+					pemBytes, err := ioutil.ReadAll(f)
+					if err != nil {
+						return errors.Wrapf(err, "could not read data from %s", filenamePemOrList)
+					}
+					certs, key, err = parsePemBlocks(pemBytes, ctx.warn)
+					if err != nil {
+						return errors.Wrapf(err, "failed to parse certificates or private keys")
+					}
+				} else {
+					// PEM
+					var err error
+					certs, key, err = parsePemBlocks([]byte(filenamePemOrList), ctx.warn)
+					if err != nil {
+						return errors.Wrapf(err, "failed to parse certificates or private keys")
+					}
+				}
+				if len(certs) == 0 {
+					if fErr != nil {
+						return fErr
+					} else {
+						return errors.Errorf("no certificates exist in the cert file: %s", filenamePemOrList)
+					}
+				}
+			case []interface{}:
+				for _, _pem := range filenamePemOrList {
+					pem, ok := _pem.(string)
+					if !ok {
+						return errors.Errorf("every item must be a PEM-formatted certificates / private key")
+					}
+					_certs, _key, err := parsePemBlocks([]byte(pem), ctx.warn)
+					if err != nil {
+						return errors.Wrapf(err, "failed to parse certificates or private keys")
+					}
+					if _key != nil {
+						if key != nil {
+							return errors.Errorf("duplicate private keys exist")
+						}
+					}
+					certs = append(certs, _certs...)
+					key = _key
+				}
+				if len(certs) == 0 {
+					return errors.Errorf("no certificates exist in cert")
+				}
+			default:
+				return errors.Errorf("expecting a string or a list of PEM-formatted certificates / private key")
+			}
+			return nil
+		},
+		"key", func(filenameOrPemDeref dereference) error {
+			if key != nil {
+				return errors.Errorf("private keys exist both in cert/ and key/")
+			}
+			switch filenameOrPem := filenameOrPemDeref.value.(type) {
+			case string:
+				f, err := os.Open(filenameOrPem)
+				if err != nil && !os.IsNotExist(err) {
+					return errors.Wrapf(err, "could not open %s", filenameOrPem)
+				}
+				var _certs [][]byte
+				if err == nil {
+					defer f.Close()
+					pemBytes, err := ioutil.ReadAll(f)
+					if err != nil {
+						return errors.Wrapf(err, "could not read data from %s", filenameOrPem)
+					}
+					_certs, key, err = parsePemBlocks(pemBytes, ctx.warn)
+					if err != nil {
+						return errors.Wrapf(err, "failed to parse certificates or private keys")
+					}
+				} else {
+					_certs, key, err = parsePemBlocks([]byte(filenameOrPem), ctx.warn)
+					if err != nil {
+						return errors.Wrapf(err, "failed to parse certificates or private keys")
+					}
+				}
+				if len(_certs) != 0 {
+					return errors.Errorf("no certificates are allowed in key")
+				}
+			default:
+				return errors.Errorf("key must be a string")
+			}
+			return nil
+		},
+	)
+	if err != nil {
 		return
 	}
-	filenameOrPem, ok := _filenamePemOrList.(string)
-	if ok {
-		var f *os.File
-		f, err = os.Open(filenameOrPem)
-		if err != nil && !os.IsNotExist(err) {
-			err = errors.Wrapf(err, "%s: could not open %s", ctx.Filename, filenameOrPem)
-			return
-		}
-		if err == nil {
-			defer f.Close()
 
-			var pemBytes []byte
-			pemBytes, err = ioutil.ReadAll(f)
-			if err != nil {
-				err = errors.Wrapf(err, "%s: could not read data from %s", ctx.Filename, filenameOrPem)
-				return
-			}
-			certs, key, err = parsePemBlocks(pemBytes, ctx.Warn)
-			if err != nil {
-				err = errors.Wrapf(err, "%s: failed to parse certificates or private keys", ctx.Filename)
-				return
-			}
-		} else {
-			certs, key, err = parsePemBlocks([]byte(filenameOrPem), ctx.Warn)
-			if err != nil {
-				err = errors.Wrapf(err, "%s: failed to parse certificates or private keys", ctx.Filename)
-				return
-			}
-		}
-	} else {
-		certs = make([][]byte, 0, 1)
-		list, ok := _filenamePemOrList.([]interface{})
-		if !ok {
-			err = errors.Errorf("%s: %s/cert must be a string or a list of PEM-formatted certificates / private key", ctx.Filename, path)
-			return
-		}
-		for _, _pem := range list {
-			pem, ok := _pem.(string)
-			if !ok {
-				err = errors.Errorf("%s: every item under %s/cert must be a PEM-formatted certificates / private key", ctx.Filename, path)
-				return
-			}
-			var _certs [][]byte
-			var _key crypto.PrivateKey
-			_certs, _key, err = parsePemBlocks([]byte(pem), ctx.Warn)
-			if err != nil {
-				err = errors.Wrapf(err, "%s: failed to parse certificates or private keys", ctx.Filename)
-				return
-			}
-			if _key != nil {
-				if key != nil {
-					err = errors.Errorf("duplicate private keys exist")
-					return
-				}
-			}
-			certs = append(certs, _certs...)
-			key = _key
-		}
-	}
-	if len(certs) == 0 {
-		err = errors.Errorf("%s: no certificates exist in %s/cert", ctx.Filename, path)
-		return
-	}
-
-	_filenamePemOrList, ok = certConfigMap["key"]
-	if ok {
-		if key != nil {
-			err = errors.Errorf("%s: private keys exist both in %s/cert and %s/key", ctx.Filename, path, path)
-			return
-		}
-		filenameOrPem, ok := _filenamePemOrList.(string)
-		if ok {
-			var f *os.File
-			var _certs [][]byte
-			f, err = os.Open(filenameOrPem)
-			if err != nil && !os.IsNotExist(err) {
-				err = errors.Wrapf(err, "%s: could not open %s", ctx.Filename, filenameOrPem)
-				return
-			}
-			if err == nil {
-				defer f.Close()
-
-				var pemBytes []byte
-				pemBytes, err = ioutil.ReadAll(f)
-				if err != nil {
-					err = errors.Wrapf(err, "%s: could not read data from %s", ctx.Filename, filenameOrPem)
-					return
-				}
-				_certs, key, err = parsePemBlocks(pemBytes, ctx.Warn)
-				if err != nil {
-					err = errors.Wrapf(err, "%s: failed to parse certificates or private keys", ctx.Filename)
-					return
-				}
-			} else {
-				_certs, key, err = parsePemBlocks([]byte(filenameOrPem), ctx.Warn)
-				if err != nil {
-					err = errors.Wrapf(err, "%s: failed to parse certificates or private keys", ctx.Filename)
-					return
-				}
-			}
-			if len(_certs) != 0 {
-				err = errors.Errorf("%s: no certificates are allowed in %s/key", ctx.Filename, path)
-				return
-			}
-		} else {
-			var _certs [][]byte
-			_certs, key, err = parsePemBlocks([]byte(filenameOrPem), ctx.Warn)
-			if err != nil {
-				err = errors.Wrapf(err, "%s: failed to parse certificates or private keys", ctx.Filename)
-				return
-			}
-			if len(_certs) != 0 {
-				err = errors.Errorf("%s: no certificates are allowed in %s/key", ctx.Filename, path)
-				return
-			}
-		}
-	}
 	if key == nil {
-		err = errors.Errorf("%s: no key found in %s/cert and %s/key", ctx.Filename, path, path)
+		err = errors.Errorf("no key found in cert and key")
 		return
 	}
 
 	x509Cert, err = x509.ParseCertificate(certs[0])
 	if err != nil {
-		err = errors.Wrapf(err, "%s: failed to parse certificate", ctx.Filename)
+		err = errors.Wrapf(err, "failed to parse certificate")
 	}
 	if !checkIfKeysArePaired(x509Cert.PublicKey, key) {
-		err = errors.Errorf("%s: certificate does not correspond to private key", ctx.Filename)
+		err = errors.Errorf("certificate does not correspond to private key")
 	}
 
 	tlsCert.Certificate = certs
@@ -705,330 +625,224 @@ func (ctx *ConfigReaderContext) extractCertPrivateKeyPairs(certConfigMap map[int
 	return
 }
 
-func (ctx *ConfigReaderContext) extractTLSConfig(tlsConfigMap map[interface{}]interface{}, path string, client bool) (retval *tls.Config, err error) {
+func (ctx *ConfigReaderContext) extractTLSConfig(deref dereference, client bool) (retval *tls.Config, err error) {
 	retval = new(tls.Config)
-	_cipherSuites, ok := tlsConfigMap["ciphers"]
-	if ok {
-		cipherSuites, ok := _cipherSuites.([]interface{})
-		if !ok {
-			err = errors.Errorf("%s: invalid value for %s/ciphers", ctx.Filename, path)
-			return
-		}
-		retval.CipherSuites = make([]uint16, 0, len(cipherSuites))
-		for _, __cipherSuite := range cipherSuites {
-			var cipherSuite uint16
-			_cipherSuite, ok := __cipherSuite.(string)
-			if ok {
-				_cipherSuite = strings.ToUpper(_cipherSuite)
-				cipherSuite, ok = cipherSuiteValues[_cipherSuite]
+	err = deref.multi(
+		"ciphers", func(cipherSuiteStrValues []string) error {
+			cipherSuites := make([]uint16, 0, 5)
+			for _, cipherSuiteStrValue := range cipherSuiteStrValues {
+				cipherSuiteStrValue = strings.ToUpper(cipherSuiteStrValue)
+				cipherSuite, ok := cipherSuiteValues[cipherSuiteStrValue]
+				if !ok {
+					return errors.Errorf("invalid cipher name: %s", cipherSuiteStrValue)
+				}
+				cipherSuites = append(cipherSuites, cipherSuite)
+				return nil
 			}
-			if !ok {
-				err = errors.Errorf("%s: invalid value for %s/ciphers", ctx.Filename, path)
-				return
-			}
-			retval.CipherSuites = append(retval.CipherSuites, cipherSuite)
-		}
-	}
-
-	__minVersion, ok := tlsConfigMap["min_version"]
-	if ok {
-		var minVersion uint16
-		_minVersion, ok := __minVersion.(string)
-		if ok {
-			_minVersion = strings.ToUpper(_minVersion)
-			minVersion, ok = tlsVersionValues[_minVersion]
-		}
-		if !ok {
-			err = errors.Errorf("%s: invalid value for %s/min_version", ctx.Filename, path)
-			return
-		}
-		retval.MinVersion = minVersion
-	}
-
-	__maxVersion, ok := tlsConfigMap["max_version"]
-	if ok {
-		var maxVersion uint16
-		_maxVersion, ok := __maxVersion.(string)
-		if ok {
-			_maxVersion = strings.ToUpper(_maxVersion)
-			maxVersion, ok = tlsVersionValues[_maxVersion]
-		}
-		if !ok {
-			err = errors.Errorf("%s: invalid value for %s/max_version", ctx.Filename, path)
-			return
-		}
-		retval.MaxVersion = maxVersion
-	}
-
-	__certs, ok := tlsConfigMap["certs"]
-	if ok {
-		_certs, ok := __certs.([]interface{})
-		if !ok {
-			err = errors.Errorf("%s: invalid value for %s/certs", ctx.Filename, path)
-			return
-		}
-		certs := make([]tls.Certificate, 0)
-		for i, __cert := range _certs {
-			_cert, ok := __cert.(map[interface{}]interface{})
-			if !ok {
-				err = errors.Errorf("%s: invalid structure under %s/certs/@%d", ctx.Filename, path, i)
-				return
-			}
-			var cert tls.Certificate
-			cert, _, err = ctx.extractCertPrivateKeyPairs(_cert, fmt.Sprintf("%s/certs/@%d", path, i))
 			if err != nil {
-				return
+				return err
 			}
-			certs = append(certs, cert)
-		}
-		retval.Certificates = certs
-		retval.BuildNameToCertificate()
+			retval.CipherSuites = cipherSuites
+			return nil
+		},
+		"min_version", func(minVersionStr string) error {
+			var minVersion uint16
+			minVersionStr = strings.ToUpper(minVersionStr)
+			minVersion, ok := tlsVersionValues[minVersionStr]
+			if !ok {
+				return errors.Errorf("invalid version value: %s", minVersionStr)
+			}
+			retval.MinVersion = minVersion
+			return nil
+		},
+		"max_version", func(maxVersionStr string) error {
+			var maxVersion uint16
+			maxVersionStr = strings.ToUpper(maxVersionStr)
+			maxVersion, ok := tlsVersionValues[maxVersionStr]
+			if !ok {
+				return errors.Errorf("invalid version value: %s", maxVersionStr)
+			}
+			retval.MinVersion = maxVersion
+			return nil
+		},
+		"certs", func(deref dereference) error {
+			certs := make([]tls.Certificate, 0)
+			err := deref.iterateHomogeneousValuedSlice(yamlMapType, func(_ int, deref dereference) error {
+				var cert tls.Certificate
+				cert, _, err = ctx.extractCertPrivateKeyPairs(deref)
+				if err != nil {
+					return err
+				}
+				certs = append(certs, cert)
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			retval.Certificates = certs
+			return nil
+		},
+	)
+	if err != nil {
+		return
 	}
+
+	// fixup
+	retval.BuildNameToCertificate()
 
 	if !client {
-		clientAuth := tls.NoClientCert
-		__clientAuth, ok := tlsConfigMap["client_auth"]
-		if ok {
-			_clientAuth, ok := __clientAuth.(map[interface{}]interface{})
-			if !ok {
-				err = errors.Errorf("%s: invalid value for %s/client_auth", ctx.Filename, path)
-				return
-			}
-			_type, ok := _clientAuth["type"]
-			if !ok {
-				err = errors.Errorf("%s: missing setting \"type\" under %s/client_auth", ctx.Filename, path)
-				return
-			}
-			type_, ok := (_type).(string)
-			if !ok {
-				err = errors.Errorf("%s: invalid value for %s/client_auth/type", ctx.Filename, path)
-				return
-			}
-			clientAuth, ok = clientAuthTypeValues[type_]
-			if clientAuth != tls.NoClientCert {
-				_clientCA, ok := _clientAuth["ca_certs"]
-				if ok {
-					retval.ClientCAs, err = ctx.extractCertPool(_clientCA, path+"/client_auth/ca_certs")
+		retval.ClientAuth = tls.NoClientCert
+		err = deref.multi(
+			"client_auth", func(typ string) error {
+				clientAuth, ok := clientAuthTypeValues[typ]
+				if !ok {
+					return errors.Errorf("invalid auth type: %s", typ)
+				}
+				if clientAuth != tls.NoClientCert {
+					err := deref.multi(
+						"ca_certs", func(deref dereference) error {
+							var err error
+							retval.ClientCAs, err = ctx.extractCertPool(deref)
+							return err
+						},
+					)
 					if err != nil {
-						return
+						return err
 					}
 				}
-			}
-		}
-		retval.ClientAuth = clientAuth
+				retval.ClientAuth = clientAuth
+				return nil
+			},
+		)
 	} else {
-		_verify, ok := tlsConfigMap["verify"]
-		if ok {
-			verify, ok := _verify.(bool)
-			if !ok {
-				err = errors.Errorf("%s: invalid value for %s/verify", ctx.Filename, path)
-				return
-			}
-			retval.InsecureSkipVerify = verify
-		}
-		_preferServerCiphers, ok := tlsConfigMap["prefer_server_ciphers"]
-		if ok {
-			preferServerCiphers, ok := _preferServerCiphers.(bool)
-			if !ok {
-				err = errors.Errorf("%s: invalid value for %s/preferServerCiphers", ctx.Filename, path)
-				return
-			}
-			retval.PreferServerCipherSuites = preferServerCiphers
-		}
-		_certs, ok := tlsConfigMap["ca_certs"]
-		if ok {
-			retval.RootCAs, err = ctx.extractCertPool(_certs, path+"/ca_certs")
-			if err != nil {
-				return
-			}
-		}
+		err = deref.multi(
+			"verify", func(v bool) error {
+				retval.InsecureSkipVerify = !v
+				return nil
+			},
+			"prefer_server_ciphers", func(v bool) error {
+				retval.PreferServerCipherSuites = v
+				return nil
+			},
+			"ca_certs", func(deref dereference) error {
+				var err error
+				retval.RootCAs, err = ctx.extractCertPool(deref)
+				return err
+			},
+		)
 	}
 	return
 }
 
-func (ctx *ConfigReaderContext) extractMITMConfig(configMap map[string]interface{}) (retval MITMConfig, err error) {
-	__tls, ok := configMap["tls"]
-	if ok {
-		_tls, ok := __tls.(map[interface{}]interface{})
-		if !ok {
-			err = errors.Errorf("%s: invalid structure under tls", ctx.Filename)
-			return
-		}
-		__client, ok := _tls["client"]
-		if ok {
-			_client, ok := __client.(map[interface{}]interface{})
-			if !ok {
-				err = errors.Errorf("%s: invalid structure under tls/client", ctx.Filename)
-				return
-			}
-			retval.ClientTLSConfigTemplate, err = ctx.extractTLSConfig(_client, "tls/client", true)
-			if err != nil {
-				return
-			}
-		} else {
-			retval.ClientTLSConfigTemplate = new(tls.Config)
-		}
-		__server, ok := _tls["server"]
-		if ok {
-			_server, ok := __server.(map[interface{}]interface{})
-			if !ok {
-				err = errors.Errorf("%s: invalid structure under tls/server", ctx.Filename)
-				return
-			}
-			retval.ServerTLSConfigTemplate, err = ctx.extractTLSConfig(_server, "tls/server", false)
-			if err != nil {
-				return
-			}
-		} else {
-			retval.ServerTLSConfigTemplate = new(tls.Config)
-		}
-		__ca, ok := _tls["ca"]
-		if !ok {
-			err = errors.Errorf("%s: item \"ca\" must exist under tls", ctx.Filename)
-			return
-		}
-		_ca, ok := __ca.(map[interface{}]interface{})
-		if !ok {
-			err = errors.Errorf("%s: invalid structure under tls/ca", ctx.Filename)
-			return
-		}
-		var tlsCert tls.Certificate
-		tlsCert, retval.SigningCertificateKeyPair.Certificate, err = ctx.extractCertPrivateKeyPairs(_ca, "tls/ca")
-		if err != nil {
-			return
-		}
-		retval.SigningCertificateKeyPair.PrivateKey = tlsCert.PrivateKey
-		__cache_directory, ok := _tls["cache_directory"]
-		if ok {
-			_cache_directory, ok := __cache_directory.(string)
-			if !ok {
-				err = errors.Errorf("%s: invalid structure under tls; cache_directory must be a string", ctx.Filename)
-				return
-			}
-			retval.CacheDirectory = _cache_directory
-		}
-		__disable_cache, ok := _tls["disable_cache"]
-		if ok {
-			_disable_cache, ok := __disable_cache.(bool)
-			if !ok {
-				err = errors.Errorf("%s: invalid structure under tls; disable_cache must be a boolean", ctx.Filename)
-				return
-			}
-			retval.DisableCache = _disable_cache
-		}
-	}
+func (ctx *ConfigReaderContext) extractMITMConfig(deref dereference) (retval MITMConfig, err error) {
+	retval.ClientTLSConfigTemplate = new(tls.Config)
+	err = deref.multi(
+		"tls", func(deref dereference) error {
+			return deref.multi(
+				"client", func(deref dereference) error {
+					var err error
+					retval.ClientTLSConfigTemplate, err = ctx.extractTLSConfig(deref, true)
+					return err
+				},
+				"server", func(deref dereference) error {
+					var err error
+					retval.ServerTLSConfigTemplate, err = ctx.extractTLSConfig(deref, false)
+					return err
+				},
+				"ca", func(deref dereference) error {
+					var tlsCert tls.Certificate
+					tlsCert, retval.SigningCertificateKeyPair.Certificate, err = ctx.extractCertPrivateKeyPairs(deref)
+					if err != nil {
+						return err
+					}
+					retval.SigningCertificateKeyPair.PrivateKey = tlsCert.PrivateKey
+					return nil
+				},
+				"cache_directory", func(cacheDirectory string) error {
+					retval.CacheDirectory = cacheDirectory
+					return nil
+				},
+				"disable_cache", func(disableCache bool) error {
+					retval.DisableCache = disableCache
+					return nil
+				},
+			)
+		},
+	)
 	return
 }
 
-func (ctx *ConfigReaderContext) extractResponseFilters(configMap map[string]interface{}) (retval []ResponseFilter, err error) {
+func (ctx *ConfigReaderContext) extractResponseFilters(deref dereference) (retval []ResponseFilter, err error) {
 	retval = make([]ResponseFilter, 0, 16)
-
-	__responseFilterConfigs, ok := configMap["response_filters"]
-	if !ok {
-		return
-	}
-	_responseFilterConfigs, ok := __responseFilterConfigs.([]interface{})
-	if !ok {
-		err = errors.Errorf("%s: invalid structure under response_filters", ctx.Filename)
-		return
-	}
-
-	for i, _responseFilterConfig := range _responseFilterConfigs {
-		responseFilterConfig, ok := _responseFilterConfig.(map[interface{}]interface{})
-		if !ok {
-			err = errors.Errorf("%s: invalid structure under response_filters/@%d", ctx.Filename, i)
-			return
-		}
-		_type, ok := responseFilterConfig["type"]
-		if !ok {
-			err = errors.Errorf("%s: missing response_filters/@%d/type", ctx.Filename, i)
-			return
-		}
-
-		type_, ok := _type.(string)
-		if !ok {
-			err = errors.Errorf("%s: invalid value for response_filters/@%d/type", ctx.Filename, i)
-			return
-		}
-
-		f, ok := FilterRepository.ResponseFilters[type_]
-		if !ok {
-			err = errors.Errorf("%s: unknown filter \"%s\"", ctx.Filename, type_)
-			return
-		}
-
-		var responseFilter ResponseFilter
-		responseFilter, err = f(ctx, responseFilterConfig)
-		if err != nil {
-			err = errors.Wrapf(err, "%s: failed to instantiate response filter \"%s\"", ctx.Filename, type_)
-			return
-		}
-
-		retval = append(retval, responseFilter)
-	}
+	err = deref.multi(
+		"response_filters", func(i int, deref dereference) error {
+			typ, err := deref.derefOne("type").stringValue()
+			if err != nil {
+				return err
+			}
+			f, ok := FilterRepository.ResponseFilters[typ]
+			if !ok {
+				return errors.Errorf("unknown filter \"%s\"", typ)
+			}
+			responseFilterConfig, err := deref.mapValue()
+			if err != nil {
+				return err
+			}
+			responseFilter, err := f(ctx, responseFilterConfig)
+			if err != nil {
+				return errors.Wrapf(err, "failed to instantiate response filter \"%s\"", typ)
+			}
+			retval = append(retval, responseFilter)
+			return nil
+		},
+	)
 	return
 }
 
-func (ctx *ConfigReaderContext) extractFileTransportConfig(configMap map[string]interface{}) (retval FileTransportConfig, err error) {
-	__fileTx, ok := configMap["file_tx"]
-	if !ok {
-		return
-	}
-
-	_fileTx, ok := __fileTx.(map[interface{}]interface{})
-	if !ok {
-		err = errors.Errorf("%s: invalid structure under file_tx", ctx.Filename)
-		return
-	}
-
-	{
-		root := "."
-		_root, ok := _fileTx["root"]
-		if ok {
-			root, ok = _root.(string)
-			if !ok {
-				err = errors.Errorf("%s: invalid value for file_tx/root", ctx.Filename)
-				return
-			}
-		}
-
-		if !filepath.IsAbs(root) {
-			var wd string
-			wd, err = os.Getwd()
-			if err != nil {
-				return
-			}
-			root = filepath.Clean(filepath.Join(wd, root))
-		}
-
-		retval.RootDirectory = root
-	}
-
-	{
-		_mimeTypeFile, ok := _fileTx["mime_type_file"]
-		if ok {
-			mimeTypeFile, ok := _mimeTypeFile.(string)
-			if !ok {
-				err = errors.Errorf("%s: invalid value for file_tx/mime_type_file", ctx.Filename)
-				return
-			}
+func (ctx *ConfigReaderContext) extractFileTransportConfig(deref dereference) (retval FileTransportConfig, err error) {
+	err = deref.multi(
+		"file_tx", func(deref dereference) error {
+			root := "."
+			mimeTypeFile := ""
 			mimeTypeFileFormat := "apache"
-			_mimeTypeFileFormat, ok := _fileTx["mime_type_file_format"]
-			if ok {
-				mimeTypeFileFormat, ok = _mimeTypeFileFormat.(string)
-				if !ok {
-					err = errors.Errorf("%s: invalid value for file_tx/mime_type_file_format", ctx.Filename)
-					return
+			err := deref.multi(
+				"root", func(v string) error {
+					root = v
+					return nil
+				},
+				"mime_type_file", func(v string) error {
+					mimeTypeFile = v
+					return nil
+				},
+				"mime_type_file_format", func(v string) error {
+					mimeTypeFileFormat = v
+					return nil
+				},
+			)
+			if err != nil {
+				return err
+			}
+
+			if !filepath.IsAbs(root) {
+				var wd string
+				wd, err = os.Getwd()
+				if err != nil {
+					return err
+				}
+				root = filepath.Clean(filepath.Join(wd, root))
+			}
+
+			retval.RootDirectory = root
+
+			if mimeTypeFile != "" {
+				retval.MimeTypes, err = mimetypes.Load(mimeTypeFile, mimeTypeFileFormat)
+				if err != nil {
+					return errors.Wrapf(err, "failed to load %s", mimeTypeFile)
 				}
 			}
-			retval.MimeTypes, err = mimetypes.Load(mimeTypeFile, mimeTypeFileFormat)
-			if err != nil {
-				err = errors.Wrapf(err, "failed to load %s", mimeTypeFile)
-				return
-			}
-		}
-	}
-
+			return nil
+		},
+	)
 	return
 }
 
@@ -1042,36 +856,34 @@ func loadConfig(yamlFile string, progname string) (*Config, error) {
 		return nil, errors.Wrapf(err, "failed to load %s", yamlFile)
 	}
 	defer f.Close()
-
-	configMap := make(map[string]interface{})
-	err = yaml.NewDecoder(f).Decode(&configMap)
+	configRoot := dereference{value: make(map[interface{}]interface{})}
+	err = yaml.NewDecoder(f).Decode(&configRoot.value)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to load %s", yamlFile)
 	}
 	ctx := &ConfigReaderContext{
-		Filename: yamlFile,
-		Warn: func(msg string) {
+		warn: func(msg string) {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", progname, msg)
 		},
 	}
-	perHostConfigs, err := ctx.extractPerHostConfigs(configMap)
+	perHostConfigs, err := ctx.extractPerHostConfigs(configRoot)
 	if err != nil {
 		return nil, err
 	}
-	proxy, err := ctx.extractProxyConfig(configMap)
+	proxy, err := ctx.extractProxyConfig(configRoot)
 	if err != nil {
 		return nil, err
 	}
-	mitm, err := ctx.extractMITMConfig(configMap)
+	mitm, err := ctx.extractMITMConfig(configRoot)
 	if err != nil {
 		return nil, err
 	}
-	responseFilters, err := ctx.extractResponseFilters(configMap)
+	responseFilters, err := ctx.extractResponseFilters(configRoot)
 	if err != nil {
 		return nil, err
 	}
 
-	fileTransport, err := ctx.extractFileTransportConfig(configMap)
+	fileTransport, err := ctx.extractFileTransportConfig(configRoot)
 	if err != nil {
 		return nil, err
 	}

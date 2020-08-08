@@ -126,7 +126,7 @@ func (ctx *DevProxy) proxyIsApplicable(req *http.Request) bool {
 		pairs := toHostPortPairs(req.URL)
 		for _, a := range pcfg.ExcludedHosts {
 			for _, b := range pairs {
-				if a == b {
+				if a.Matches(b) {
 					return false
 				}
 			}

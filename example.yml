@@ -3,6 +3,8 @@ proxy:
   http: http://127.0.0.1:9080/
   https: http://127.0.0.1:9080/
   excluded:
+    - localhost:8081
+    - localhost:8082
     - www.google.com
     - www.google.co.jp
 

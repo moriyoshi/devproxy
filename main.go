@@ -189,6 +189,7 @@ func (ctx *DevProxy) newHttpTransport() *httpx.Transport {
 	}
 	transport.RegisterProtocol("fastcgi", &fastCGIRoundTripper{Logger: ctx.Logger})
 	transport.RegisterProtocol("file", NewFileTransport(ctx.Config.FileTransport))
+	transport.RegisterProtocol("x-http-redirect", &redirector{Logger: ctx.Logger})
 	return transport
 }
 

@@ -86,6 +86,8 @@ type ResponseWriter struct {
 	protoMajor, protoMinor int
 }
 
+var proxyContextKey string = "devproxy:proxyCtx"
+
 func makeHttp10Response(header string, body string) string {
 	return header + "\r\n" + fmt.Sprintf("Content-Length: %d\r\n", len(body)) + "Connection: close\r\n\r\n" + body
 }
@@ -369,6 +371,13 @@ func (proxyCtx *OurProxyCtx) HandleConnect(r *http.Request, proxyClient net.Conn
 
 			nestedProxyCtx := new(OurProxyCtx)
 			*nestedProxyCtx = *proxyCtx
+			req = req.WithContext(
+				context.WithValue(
+					r.Context(),
+					proxyContextKey,
+					nestedProxyCtx,
+				),
+			)
 			nestedProxyCtx.OrigReq = req
 			nestedProxyCtx.Req = req
 
@@ -453,6 +462,13 @@ func (proxy *OurProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		Tr:              proxy.Tr,
 		ResponseFilters: proxy.ResponseFilters,
 	}
+	r = r.WithContext(
+		context.WithValue(
+			r.Context(),
+			proxyContextKey,
+			proxyCtx,
+		),
+	)
 	if r.Method == "CONNECT" {
 		hij, ok := w.(http.Hijacker)
 		if !ok {
@@ -558,20 +574,6 @@ func (proxy *OurProxyHttpServer) ConnectDial(netCtx context.Context, addr string
 	return conn, err
 }
 
-func CloneRequest(r *http.Request) *http.Request {
-	newRequest := new(http.Request)
-	*newRequest = *r
-	newRequest.URL = new(url.URL)
-	*newRequest.URL = *r.URL
-	if r.Header != nil {
-		newRequest.Header = httpx.CloneHeader(r.Header)
-	}
-	if r.Trailer != nil {
-		newRequest.Trailer = httpx.CloneHeader(r.Trailer)
-	}
-	return newRequest
-}
-
 func FilterRequest(perHostConfig *PerHostConfig, r *http.Request, proxyCtx *OurProxyCtx) (*http.Request, *http.Response) {
 	newUrlString := ""
 	headerSets := (http.Header)(nil)
@@ -613,7 +615,7 @@ func FilterRequest(perHostConfig *PerHostConfig, r *http.Request, proxyCtx *OurP
 		if newUrl.RawQuery == "" {
 			newUrl.RawQuery = r.URL.RawQuery
 		}
-		newRequest := CloneRequest(r)
+		newRequest := r.Clone(r.Context())
 		newRequest.URL = newUrl
 		for headerName, headers := range headerSets {
 			if headers == nil {

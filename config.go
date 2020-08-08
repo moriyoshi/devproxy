@@ -70,6 +70,12 @@ type PerHostConfig struct {
 	Patterns []Pattern
 }
 
+type PreparedCertificate struct {
+	Pattern        *regexp.Regexp
+	TLSCertificate *tls.Certificate
+	Certificate    *x509.Certificate
+}
+
 type MITMConfig struct {
 	ServerTLSConfigTemplate   *tls.Config
 	ClientTLSConfigTemplate   *tls.Config
@@ -77,6 +83,7 @@ type MITMConfig struct {
 		Certificate *x509.Certificate
 		PrivateKey  crypto.PrivateKey
 	}
+	Prepared       []PreparedCertificate
 	CacheDirectory string
 	DisableCache   bool
 }
@@ -140,7 +147,7 @@ func (ctx *ConfigReaderContext) extractPerHostConfigs(deref dereference) (perHos
 		"hosts", func(urlStr string, hostMap dereference) error {
 			url, err := url.Parse(urlStr)
 			if err != nil {
-				return errors.Wrapf(err, "invalid value for URL (%s) under %s", urlStr)
+				return errors.Wrapf(err, "invalid value for URL (%s)", urlStr)
 			}
 			if url.Path != "" {
 				return errors.Errorf("path may not be present: %s", urlStr)
@@ -735,6 +742,7 @@ func (ctx *ConfigReaderContext) extractTLSConfig(deref dereference, client bool)
 }
 
 func (ctx *ConfigReaderContext) extractMITMConfig(deref dereference) (retval MITMConfig, err error) {
+	retval.ServerTLSConfigTemplate = new(tls.Config)
 	retval.ClientTLSConfigTemplate = new(tls.Config)
 	err = deref.multi(
 		"tls", func(deref dereference) error {
@@ -757,6 +765,29 @@ func (ctx *ConfigReaderContext) extractMITMConfig(deref dereference) (retval MIT
 					}
 					retval.SigningCertificateKeyPair.PrivateKey = tlsCert.PrivateKey
 					return nil
+				},
+				"prepared", func(_ int, deref dereference) error {
+					visited := false
+					return deref.iterateHomogeneousValuedMap(yamlMapType, func(hostPattern string, deref dereference) error {
+						if visited {
+							return errors.Errorf("extra item exists")
+						}
+						visited = true
+						hostPatternRegexp, err := regexp.Compile(hostPattern)
+						if err != nil {
+							return errors.Errorf("invalid regexp %s", hostPattern)
+						}
+						tlsCert, cert, err := ctx.extractCertPrivateKeyPairs(deref)
+						if err != nil {
+							return err
+						}
+						retval.Prepared = append(retval.Prepared, PreparedCertificate{
+							Pattern:        hostPatternRegexp,
+							TLSCertificate: &tlsCert,
+							Certificate:    cert,
+						})
+						return nil
+					})
 				},
 				"cache_directory", func(cacheDirectory string) error {
 					retval.CacheDirectory = cacheDirectory
@@ -862,6 +893,7 @@ func loadConfig(yamlFile string, progname string) (*Config, error) {
 		return nil, errors.Wrapf(err, "failed to load %s", yamlFile)
 	}
 	ctx := &ConfigReaderContext{
+		filename: yamlFile,
 		warn: func(msg string) {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", progname, msg)
 		},

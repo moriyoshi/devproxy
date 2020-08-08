@@ -1720,7 +1720,7 @@ type connectMethodKey struct {
 
 func (k connectMethodKey) String() string {
 	// Only used by tests.
-	return fmt.Sprintf("%s|%s|%s|%p", k.proxy, k.scheme, k.addr, k.tlsConfigAddr)
+	return fmt.Sprintf("%s|%s|%s|%d", k.proxy, k.scheme, k.addr, k.tlsConfigAddr)
 }
 
 // persistConn wraps a connection, usually a persistent one

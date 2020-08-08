@@ -15,6 +15,14 @@ tls:
   ca:
     cert: testca.rsa.crt.pem
     key: testca.rsa.key.pem
+  # MITM with prepared certificates
+  prepared:
+    - ^local\\.my-domain\\.example\\.com$:
+        cert: certs/my-domain-cert.pem
+        key: certs/my-domain-key.pem
+    - .*:
+        cert: real-certs/fallback-cert.pem
+        key: real-certs/fallback-key.pem
 
 # response filters
 response_filters:

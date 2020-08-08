@@ -778,7 +778,7 @@ func (deref dereference) homogeneousMapValue(typ reflect.Type) (interface{}, err
 	}
 	mapVal, ok := deref.value.(map[interface{}]interface{})
 	if !ok {
-		return nil, deref.errorf("mapping of %s expected, got %T", deref.value)
+		return nil, deref.errorf("mapping of %s expected, got %T", typ.String(), deref.value)
 	}
 	hMapVal := reflect.MakeMap(reflect.MapOf(emptyInterfaceType, typ))
 	for k, v := range mapVal {

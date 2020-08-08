@@ -125,6 +125,8 @@ var tlsVersionValues = map[string]uint16{
 	"TLS1.1": tls.VersionTLS11,
 	"TLS12":  tls.VersionTLS12,
 	"TLS1.2": tls.VersionTLS12,
+	"TLS13":  tls.VersionTLS13,
+	"TLS1.3": tls.VersionTLS13,
 }
 
 type ConfigReaderContext struct {

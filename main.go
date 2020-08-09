@@ -52,6 +52,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -157,16 +158,13 @@ func (ctx *DevProxy) getProxyUrlForRequest(req *http.Request) (*url.URL, *tls.Co
 }
 
 func (ctx *DevProxy) newTLSConfigFactory() TLSConfigFactory {
-	if ctx.Config.MITM.SigningCertificateKeyPair.Certificate == nil {
-		return nil
-	}
 	return func(hostPortPairStr string, proxyCtx *OurProxyCtx) (*tls.Config, error) {
 		pair := splitHostPort(hostPortPairStr)
 		if ctx.Config.MITM.ServerTLSConfigTemplate == nil {
 			return nil, errors.Errorf("no TLS configuration template is available")
 		}
 		config := ctx.Config.MITM.ServerTLSConfigTemplate.Clone()
-		ctx.Logger.Infof("Obtaining temporary certificate for %s", pair.Host)
+		ctx.Logger.Debugf("obtaining temporary certificate for %s", pair.Host)
 		cert, err := ctx.prepareMITMCertificate([]string{pair.Host})
 		if err != nil {
 			return nil, errors.Wrapf(err, "cannot sign host certificate with provided CA")
@@ -199,29 +197,51 @@ func validateDomainName(host string) bool {
 	return domainNameRegex.MatchString(host)
 }
 
-func (ctx *DevProxy) prepareMITMCertificate(hosts []string) (*tls.Certificate, error) {
-	now, err := ctx.Config.NowGetter()
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to retrieve the current time")
+func (ctx *DevProxy) searchPreparedCertificate(hosts []string, now time.Time) (*tls.Certificate, bool, error) {
+	for _, prepared := range ctx.Config.MITM.Prepared {
+		hostMap := map[string]struct{}{}
+		for _, host := range hosts {
+			if !prepared.Pattern.MatchString(host) {
+				break
+			}
+			hostMap[host] = struct{}{}
+		}
+		if len(hostMap) != len(hosts) {
+			continue
+		}
+		cert := prepared.Certificate
+		if cert.Subject.CommonName != "" {
+			for _, host := range hosts {
+				if wildMatch(cert.Subject.CommonName, host) {
+					delete(hostMap, host)
+				}
+			}
+		}
+		for _, dnsName := range cert.DNSNames {
+			for _, host := range hosts {
+				if wildMatch(dnsName, host) {
+					delete(hostMap, host)
+				}
+			}
+		}
+		if len(hostMap) == 0 {
+			return prepared.TLSCertificate, true, nil
+		}
 	}
-	sortedHosts := make([]string, len(hosts))
-	copy(sortedHosts, hosts)
-	sort.Strings(sortedHosts)
-	cert, err := ctx.certCache.Get(sortedHosts, now)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to reetrieve a certificate that corresponds to [%v] from the cert cache", sortedHosts)
-	}
-	if cert != nil {
-		ctx.Logger.Infof("Obtained certificate from cache")
-		return cert, nil
-	}
+	return nil, false, nil
+}
+
+func (ctx *DevProxy) generateMITMCertificate(host string, sortedSans []string, now time.Time) (*tls.Certificate, error) {
 	ca := ctx.Config.MITM.SigningCertificateKeyPair
+	if ca.Certificate == nil {
+		return nil, errors.Errorf("no MITM CA is available")
+	}
 	ctx.Logger.Debugf("CA: CN=%s", ca.Certificate.Subject.CommonName)
 	start := now.Add(-time.Minute)
 	end := now.Add(30 * 3600 * time.Hour)
 
 	h := sha1.New()
-	for _, host := range sortedHosts {
+	for _, host := range sortedSans {
 		h.Write([]byte(host))
 	}
 	binary.Write(h, binary.BigEndian, start)
@@ -237,7 +257,7 @@ func (ctx *DevProxy) prepareMITMCertificate(hosts []string) (*tls.Certificate, e
 		Issuer:             ca.Certificate.Subject,
 		Subject: pkix.Name{
 			Organization: []string{"GoProxy untrusted MITM proxy"},
-			CommonName:   hosts[0],
+			CommonName:   host,
 		},
 		NotBefore:             start,
 		NotAfter:              end,
@@ -247,16 +267,56 @@ func (ctx *DevProxy) prepareMITMCertificate(hosts []string) (*tls.Certificate, e
 		IsCA:                  false,
 		MaxPathLen:            0,
 		MaxPathLenZero:        true,
-		DNSNames:              hosts,
+		DNSNames:              sortedSans,
 	}
 	derBytes, err := x509.CreateCertificate(ctx.CryptoRandReader, &template, ca.Certificate, ca.Certificate.PublicKey, ca.PrivateKey)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create a certificate")
 	}
-	cert = &tls.Certificate{
+	return &tls.Certificate{
 		Certificate: [][]byte{derBytes, ca.Certificate.Raw},
 		PrivateKey:  ca.PrivateKey,
+	}, nil
+}
+
+func (ctx *DevProxy) prepareMITMCertificate(hosts []string) (*tls.Certificate, error) {
+	now, err := ctx.Config.NowGetter()
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to retrieve the current time")
 	}
+	canonicalizedHosts := make([]string, len(hosts))
+	for i, host := range hosts {
+		canonicalizedHosts[i] = strings.TrimRight(strings.ToLower(host), ".")
+	}
+	sortedHosts := make([]string, len(hosts))
+	copy(sortedHosts, canonicalizedHosts)
+	sort.Strings(sortedHosts)
+	cert, err := ctx.certCache.Get(sortedHosts, now)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to reetrieve a certificate that corresponds to [%v] from the cert cache", sortedHosts)
+	}
+	if cert != nil {
+		ctx.Logger.Infof("Obtained certificate from cache")
+		return cert, nil
+	}
+
+	// try prepared
+	cert, ok, err := ctx.searchPreparedCertificate(sortedHosts, now)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		cert, err = ctx.generateMITMCertificate(canonicalizedHosts[0], sortedHosts, now)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if cert == nil {
+		return nil, errors.Wrapf(err, "failed to prepare MITM certificates")
+	}
+
 	err = ctx.certCache.Put(sortedHosts, cert)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to store the certificate to the cache")

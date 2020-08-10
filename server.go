@@ -59,7 +59,7 @@ type ResponseFilter interface {
 type OurProxyHttpServer struct {
 	Ctx              *DevProxy
 	Logger           *logrus.Logger
-	Tr               *httpx.Transport
+	Tr               HttpxTransport
 	TLSConfigFactory TLSConfigFactory
 	ResponseFilters  []ResponseFilter
 	SessionSerial    int64
@@ -72,7 +72,7 @@ type OurProxyCtx struct {
 	Req             *http.Request
 	OrigResp        *http.Response
 	Resp            *http.Response
-	Tr              *httpx.Transport
+	Tr              HttpxTransport
 	ResponseFilters []ResponseFilter
 	Error           error
 	Session         int64
@@ -538,28 +538,13 @@ func buildFakeHTTPSRequestFromHostPortPair(addr string) *http.Request {
 	}
 }
 
-func (proxy *OurProxyHttpServer) doDial(ctx context.Context, addr string) (net.Conn, error) {
-	if proxy.Tr.DialContext != nil {
-		return proxy.Tr.DialContext(ctx, "tcp", addr)
-	}
-	return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
-}
-
-func (proxy *OurProxyHttpServer) doDialTLS(ctx context.Context, addr HostPortPair, tlsConfigTemplate *tls.Config) (net.Conn, error) {
-	if tlsConfigTemplate == nil {
-		if proxy.Tr.DialTLS != nil {
-			return proxy.Tr.DialTLS(ctx, "tcp", addr.String())
-		}
-		tlsConfigTemplate = proxy.Tr.TLSClientConfig
-	}
-	conn, err := net.Dial("tcp", addr.String())
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to connect to %v", addr)
-	}
-	tlsConfig := tlsConfigTemplate.Clone()
-	tlsConfig.ServerName = addr.Host
-	return tls.Client(conn, tlsConfig), nil
-}
+// func (proxy *OurProxyHttpServer) doDial(ctx context.Context, addr string) (net.Conn, error) {
+// 	return proxy.Tr.DialContext(ctx, "tcp", addr)
+// }
+//
+// func (proxy *OurProxyHttpServer) doDialTLS(ctx context.Context, addr HostPortPair, tlsConfigTemplate *tls.Config) (net.Conn, error) {
+// 	return proxy.Tr.DialTLS2(ctx, "tcp", addr.String(), tlsConfigTemplate)
+// }
 
 func (proxy *OurProxyHttpServer) ConnectDial(netCtx context.Context, addr string) (net.Conn, error) {
 	cm, err := proxy.Tr.ConnectMethodForRequest(&httpx.TransportRequest{Request: buildFakeHTTPSRequestFromHostPortPair(addr), Extra: nil})

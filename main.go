@@ -34,6 +34,7 @@
 package main
 
 import (
+	"context"
 	crand "crypto/rand"
 	"crypto/sha1"
 	"crypto/tls"
@@ -63,6 +64,81 @@ import (
 )
 
 type TLSConfigFactory func(hostPortPairStr string, proxyCtx *OurProxyCtx) (*tls.Config, error)
+
+type HttpxTransport interface {
+	http.RoundTripper
+	RegisterProtocol(string, http.RoundTripper)
+	CloseIdleConnections()
+	CancelRequest(*http.Request, error)
+	ConnectMethodForRequest(*httpx.TransportRequest) (httpx.ConnectMethod, error)
+	DoDial(context.Context, httpx.ConnectMethod) (net.Conn, *tls.ConnectionState, bool, func(http.Header), error)
+	DialContext(context.Context, string, string) (net.Conn, error)
+	DialTLS2(context.Context, string, string, *tls.Config) (net.Conn, error)
+}
+
+type httpxTransportWrapper struct {
+	*httpx.Transport
+}
+
+func (htw *httpxTransportWrapper) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if htw.Transport.DialContext != nil {
+		return htw.Transport.DialContext(ctx, network, addr)
+	}
+	return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+}
+
+func (htw *httpxTransportWrapper) DialTLS2(ctx context.Context, network, addr string, config *tls.Config) (net.Conn, error) {
+	if htw.Transport.DialTLS2 != nil {
+		return htw.Transport.DialTLS2(ctx, network, addr, config)
+	}
+	if config == nil {
+		if htw.Transport.DialTLS != nil {
+			return htw.Transport.DialTLS(ctx, "tcp", addr)
+		} else {
+			config = htw.Transport.TLSClientConfig
+		}
+	}
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to connect to %v", addr)
+	}
+	tlsConfig := config.Clone()
+	tlsConfig.ServerName = splitHostPort(addr).Host
+	return tls.Client(conn, tlsConfig), nil
+}
+
+func trAsInterface(tr *httpx.Transport) HttpxTransport {
+	return &httpxTransportWrapper{tr}
+}
+
+type transportRoundTripperWrapper struct {
+	HttpxTransport
+	wrapper RoundTripperWrapper
+}
+
+func (ttw *transportRoundTripperWrapper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return ttw.wrapper(ttw, req)
+}
+
+type roundTripperWrapper struct {
+	http.RoundTripper
+	wrapper RoundTripperWrapper
+}
+
+func (rtw *roundTripperWrapper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return rtw.wrapper(rtw, req)
+}
+
+func wrapRoundTripper(tr http.RoundTripper, rtw RoundTripperWrapper) (http.RoundTripper, error) {
+	switch tr := tr.(type) {
+	case HttpxTransport:
+		return &transportRoundTripperWrapper{tr, rtw}, nil
+	case http.RoundTripper:
+		return &roundTripperWrapper{tr, rtw}, nil
+	default:
+		return nil, errors.Errorf("invalid round tripper: %T", tr)
+	}
+}
 
 type DevProxy struct {
 	Logger           *logrus.Logger
@@ -180,15 +256,28 @@ func (ctx *DevProxy) newProxyURLBuilder() func(*http.Request) (*url.URL, *tls.Co
 	}
 }
 
-func (ctx *DevProxy) newHttpTransport() *httpx.Transport {
-	transport := &httpx.Transport{
+func (ctx *DevProxy) newHttpTransport() (tr HttpxTransport, err error) {
+	tr = trAsInterface(&httpx.Transport{
 		TLSClientConfig: ctx.Config.MITM.ClientTLSConfigTemplate,
 		Proxy2:          ctx.newProxyURLBuilder(),
+	})
+	tr.RegisterProtocol("fastcgi", &fastCGIRoundTripper{Logger: ctx.Logger})
+	tr.RegisterProtocol("file", NewFileTransport(ctx.Config.FileTransport))
+	tr.RegisterProtocol("x-http-redirect", &redirector{Logger: ctx.Logger})
+	if rtwf := ctx.Config.Proxy.Auth.RoundTripperWrapperFactory; rtwf != nil {
+		var rt RoundTripperWrapper
+		rt, err = rtwf()
+		if err != nil {
+			return
+		}
+		var wrt http.RoundTripper
+		wrt, err = wrapRoundTripper(tr, rt)
+		if err != nil {
+			return
+		}
+		tr = wrt.(HttpxTransport)
 	}
-	transport.RegisterProtocol("fastcgi", &fastCGIRoundTripper{Logger: ctx.Logger})
-	transport.RegisterProtocol("file", NewFileTransport(ctx.Config.FileTransport))
-	transport.RegisterProtocol("x-http-redirect", &redirector{Logger: ctx.Logger})
-	return transport
+	return
 }
 
 var domainNameRegex = regexp.MustCompile("^[A-Za-z](?:[0-9A-Za-z-_]*[0-9A-Za-z])?$")
@@ -366,15 +455,19 @@ func (ctx *DevProxy) checkIfTunnelRequestMatchesToUrl(url_ *url.URL, req *http.R
 	return false
 }
 
-func (ctx *DevProxy) newProxyHttpServer() *OurProxyHttpServer {
+func (ctx *DevProxy) newProxyHttpServer() (*OurProxyHttpServer, error) {
+	tr, err := ctx.newHttpTransport()
+	if err != nil {
+		return nil, err
+	}
 	return &OurProxyHttpServer{
 		Ctx:              ctx,
 		Logger:           ctx.Logger,
-		Tr:               ctx.newHttpTransport(),
+		Tr:               tr,
 		TLSConfigFactory: ctx.newTLSConfigFactory(),
 		ResponseFilters:  ctx.Config.ResponseFilters,
 		SessionSerial:    0,
-	}
+	}, nil
 }
 
 func (ctx *DevProxy) Dispose() {
@@ -445,7 +538,11 @@ func main() {
 		),
 	}
 	defer ctx.Dispose()
-	proxy := ctx.newProxyHttpServer()
-	logger.Infof("Listening on %s...", listenOn)
+	proxy, err := ctx.newProxyHttpServer()
+	if err != nil {
+		logger.Fatalf("could not initialize the proxy server: %s", err.Error())
+		os.Exit(1)
+	}
+	logger.Infof("listening on %s...", listenOn)
 	logger.Fatal(http.ListenAndServe(listenOn, proxy))
 }

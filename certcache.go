@@ -40,6 +40,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -47,6 +48,7 @@ import (
 )
 
 type CertCache struct {
+	mu         sync.Mutex
 	CacheDir   string
 	Logger     *logrus.Logger
 	certs      map[string]*tls.Certificate
@@ -262,6 +264,8 @@ func (c *CertCache) readCertificate(key string, hosts []string, now time.Time) (
 }
 
 func (c *CertCache) Put(hosts []string, cert *tls.Certificate) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	key := buildKeyString(hosts)
 	c.certs[key] = cert
 	err := c.writeCertificate(key, cert)
@@ -273,6 +277,8 @@ func (c *CertCache) Put(hosts []string, cert *tls.Certificate) error {
 }
 
 func (c *CertCache) Get(hosts []string, now time.Time) (cert *tls.Certificate, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	key := buildKeyString(hosts)
 	cert, ok := c.certs[key]
 	if !ok {

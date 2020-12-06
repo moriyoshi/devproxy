@@ -2,6 +2,11 @@
 proxy:
   http: http://127.0.0.1:9080/
   https: http://127.0.0.1:9080/
+  auth:
+    type: ntlm
+    credentials:
+      user: DOMAIN\\FOO
+      password: PASS
   excluded:
     - localhost:8081
     - localhost:8082

@@ -1406,8 +1406,12 @@ func addTLS(t *Transport, tlsConfig *tls.Config, name string, conn net.Conn, tra
 
 func (t *Transport) doDialFirstHop(ctx context.Context, cm ConnectMethod, trace *httptrace.ClientTrace) (conn net.Conn, tlsState *tls.ConnectionState, err error) {
 	firstHopScheme := cm.Scheme()
-	if firstHopScheme == "https" && t.DialTLS != nil {
-		conn, err = t.DialTLS(ctx, "tcp", cm.Addr())
+	if firstHopScheme == "https" && (t.DialTLS2 != nil || t.DialTLS != nil) {
+		if t.DialTLS2 != nil {
+			conn, err = t.DialTLS2(ctx, "tcp", cm.Addr(), t.TLSClientConfig)
+		} else {
+			conn, err = t.DialTLS(ctx, "tcp", cm.Addr())
+		}
 		if err != nil {
 			return
 		}

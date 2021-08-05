@@ -265,8 +265,7 @@ func (ctx *DevProxy) generateMITMCertificate(host string, sortedSans []string, n
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
-		MaxPathLen:            0,
-		MaxPathLenZero:        true,
+		MaxPathLen:            -1,
 		DNSNames:              sortedSans,
 	}
 	derBytes, err := x509.CreateCertificate(ctx.CryptoRandReader, &template, ca.Certificate, ca.Certificate.PublicKey, ca.PrivateKey)

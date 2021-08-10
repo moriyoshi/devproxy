@@ -86,6 +86,7 @@ type MITMConfig struct {
 	Prepared       []PreparedCertificate
 	CacheDirectory string
 	DisableCache   bool
+	ValidityPeriod int
 }
 
 type ProxyConfig struct {
@@ -744,6 +745,7 @@ func (ctx *ConfigReaderContext) extractTLSConfig(deref dereference, client bool)
 func (ctx *ConfigReaderContext) extractMITMConfig(deref dereference) (retval MITMConfig, err error) {
 	retval.ServerTLSConfigTemplate = new(tls.Config)
 	retval.ClientTLSConfigTemplate = new(tls.Config)
+	retval.ValidityPeriod = 4500
 	err = deref.multi(
 		"tls", func(deref dereference) error {
 			return deref.multi(
@@ -764,6 +766,13 @@ func (ctx *ConfigReaderContext) extractMITMConfig(deref dereference) (retval MIT
 						return err
 					}
 					retval.SigningCertificateKeyPair.PrivateKey = tlsCert.PrivateKey
+					return nil
+				},
+				"validity", func(validity int) error {
+					if validity <= 0 {
+						return errors.Errorf("invalid validity %d days", validity)
+					}
+					retval.ValidityPeriod = validity
 					return nil
 				},
 				"prepared", func(_ int, deref dereference) error {

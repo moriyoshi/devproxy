@@ -238,7 +238,7 @@ func (ctx *DevProxy) generateMITMCertificate(host string, sortedSans []string, n
 	}
 	ctx.Logger.Debugf("CA: CN=%s", ca.Certificate.Subject.CommonName)
 	start := now.Add(-time.Minute)
-	end := now.Add(30 * 3600 * time.Hour)
+	end := now.Add(time.Duration(ctx.Config.MITM.ValidityPeriod) * 24 * time.Hour)
 
 	h := sha1.New()
 	for _, host := range sortedSans {

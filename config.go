@@ -745,7 +745,7 @@ func (ctx *ConfigReaderContext) extractTLSConfig(deref dereference, client bool)
 func (ctx *ConfigReaderContext) extractMITMConfig(deref dereference) (retval MITMConfig, err error) {
 	retval.ServerTLSConfigTemplate = new(tls.Config)
 	retval.ClientTLSConfigTemplate = new(tls.Config)
-	retval.ValidityPeriod = 4500
+	retval.ValidityPeriod = 397
 	err = deref.multi(
 		"tls", func(deref dereference) error {
 			return deref.multi(

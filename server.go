@@ -617,6 +617,11 @@ func FilterRequest(perHostConfig *PerHostConfig, r *http.Request, proxyCtx *OurP
 		}
 		newRequest := r.Clone(r.Context())
 		newRequest.URL = newUrl
+		host := headerSets.Get("Host")
+		if host != "" {
+			newRequest.Host = host
+			headerSets.Del("Host")
+		}
 		for headerName, headers := range headerSets {
 			if headers == nil {
 				delete(newRequest.Header, headerName)

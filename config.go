@@ -35,6 +35,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
@@ -52,6 +53,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/go-ntlmssp"
+	"github.com/dpotapov/go-spnego"
 	"github.com/moriyoshi/mimetypes"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
@@ -89,9 +92,24 @@ type MITMConfig struct {
 	ValidityPeriod int
 }
 
+type DirectSetter func(*http.Request) error
+
+type UserPasswordPair struct {
+	User     string
+	Password string
+}
+
+type RoundTripperWrapper func(http.RoundTripper, *http.Request) (*http.Response, error)
+
+type AuthConfig struct {
+	RoundTripperWrapperFactory func() (RoundTripperWrapper, error)
+	CredentialsProvider        func(context.Context) (interface{}, error)
+}
+
 type ProxyConfig struct {
 	HTTPProxy     *url.URL
 	HTTPSProxy    *url.URL
+	Auth          AuthConfig
 	IncludedHosts []HostPortPair
 	ExcludedHosts []HostPortPair
 	TLSConfig     *tls.Config
@@ -258,6 +276,75 @@ func parseUrlOrHostPortPair(urlOrHostPortPair string) (retval *url.URL, err erro
 	return
 }
 
+func (ctx *ConfigReaderContext) lookupRoundTripperWrapperFactory(typ string) (func() (RoundTripperWrapper, error), error) {
+	switch typ {
+	case "ntlm", "ntlm-ssp":
+		return func() (RoundTripperWrapper, error) {
+			return func(rt http.RoundTripper, req *http.Request) (*http.Response, error) {
+				return ntlmssp.Negotiator{rt}.RoundTrip(req)
+			}, nil
+		}, nil
+	case "gssapi", "spnego":
+		return func() (RoundTripperWrapper, error) {
+			p := spnego.New()
+			return func(rt http.RoundTripper, req *http.Request) (*http.Response, error) {
+				err := p.SetSPNEGOHeader(req)
+				if err != nil {
+					return nil, err
+				}
+				return rt.RoundTrip(req)
+			}, nil
+		}, nil
+	default:
+		return nil, errors.Errorf("unknown roundtripper wrapper: %s", typ)
+	}
+}
+
+func (ctx *ConfigReaderContext) extractAuthConfig(deref dereference) (retval AuthConfig, err error) {
+	err = deref.multi(
+		"type", func(typ string) error {
+			var err error
+			retval.RoundTripperWrapperFactory, err = ctx.lookupRoundTripperWrapperFactory(typ)
+			return err
+		},
+		"credentials", func(deref dereference) error {
+			var upp *UserPasswordPair
+			err := deref.multi(
+				"user", func(v string) error {
+					if upp == nil {
+						upp = &UserPasswordPair{}
+					}
+					upp.User = v
+					return nil
+				},
+				"password", func(v string) error {
+					if upp == nil {
+						upp = &UserPasswordPair{}
+					}
+					upp.Password = v
+					return nil
+				},
+			)
+			if err != nil {
+				return err
+			}
+			if upp != nil {
+				retval.CredentialsProvider = func(_ context.Context) (interface{}, error) {
+					return upp, nil
+				}
+			} else {
+				retval.CredentialsProvider = func(_ context.Context) (interface{}, error) {
+					return func(_ *http.Request) error {
+						return nil
+					}, nil
+				}
+			}
+			return nil
+		},
+	)
+	return
+}
+
 func (ctx *ConfigReaderContext) extractProxyConfig(deref dereference) (retval ProxyConfig, err error) {
 	err = deref.multi(
 		"proxy", func(deref dereference) error {
@@ -279,6 +366,11 @@ func (ctx *ConfigReaderContext) extractProxyConfig(deref dereference) (retval Pr
 					}
 					retval.HTTPSProxy = httpsProxyUrl
 					return nil
+				},
+				"auth", func(deref dereference) error {
+					var err error
+					retval.Auth, err = ctx.extractAuthConfig(deref)
+					return err
 				},
 				"included", func(includedHosts []string) error {
 					retval.IncludedHosts, err = convertUnparsedHostsIntoPairs(includedHosts)
